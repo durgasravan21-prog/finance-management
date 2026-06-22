@@ -101,11 +101,11 @@ const AMT   = /(\d+(?:,\d+)*(?:\.\d{1,2})?)/;
 // VPA pattern: alphanumeric + dots/hyphens @ handle
 const VPA   = /([\w.\-]+@[\w.\-]+)/;
 
-// Account last‐4 (preceded by XX / XXXX / **)
-const ACCT  = /(?:X{2,}|x{2,}|\*{2,})(\d{4})/;
+// Account last‐N (preceded by XX / XXXX / ** or optional no./number prefix, matching 2 to 6 digits)
+const ACCT  = /(?:A\/c|Acct|Account)\s*(?:no\.?\s*|number\s*|#\s*)?(?:X+|x+|\*+)?(\d{2,6})/i;
 
-// UPI Reference number (10‑14 digits)
-const UPIREF = /(\d{10,14})/;
+// UPI Reference number (10‑16 digits with various prefixes like Ref no)
+const UPIREF = /(?:UPI|Txn|UTR|Ref)\s*(?:Ref|No|Num|Number|ID|no\.?|\s+)*[:.#\-]?\s*(\d{10,16})/i;
 
 /* ── Bank‑specific parsers (ordered by specificity) ──────── */
 
@@ -123,7 +123,7 @@ const bankParsers = [
       let m;
 
       // Account
-      m = sms.match(/A\/c\s*(?:no\.?\s*)?(?:X{2,}|x{2,}|\*{2,})(\d{4})/i);
+      m = sms.match(ACCT);
       if (m) r.accountLast4 = m[1];
 
       // Amount  (credited by Rs.2500.00)
@@ -139,7 +139,7 @@ const bankParsers = [
       if (m) r.senderVPA = m[1];
 
       // UPI Ref
-      m = sms.match(/UPI\s*Ref\s*(?:No\.?\s*)?(\d{10,14})/i);
+      m = sms.match(UPIREF);
       if (m) r.upiRefNo = m[1];
 
       // Available Balance
@@ -167,7 +167,7 @@ const bankParsers = [
       if (m) r.amount = parseAmount(m[1]);
 
       // Account
-      m = sms.match(/A\/c\s*(?:X{2,}|x{2,}|\*{2,})(\d{4})/i);
+      m = sms.match(ACCT);
       if (m) r.accountLast4 = m[1];
 
       // Date
@@ -183,7 +183,7 @@ const bankParsers = [
       if (m) r.availableBalance = parseAmount(m[1]);
 
       // Txn Ref
-      m = sms.match(/Txn\s*Ref\s*:?\s*(\d{10,14})/i);
+      m = sms.match(UPIREF);
       if (m) r.upiRefNo = m[1];
 
       r.parsed = !!(r.amount && r.senderVPA);
@@ -203,7 +203,7 @@ const bankParsers = [
       let m;
 
       // Account
-      m = sms.match(/a\/c\s*(?:X{2,}|x{2,}|\*{2,})(\d{4})/i);
+      m = sms.match(ACCT);
       if (m) r.accountLast4 = m[1];
 
       // Amount
@@ -219,7 +219,7 @@ const bankParsers = [
       if (m) r.senderVPA = m[1];
 
       // UPI Ref (third segment after UPI/vpa/)
-      m = sms.match(/UPI\/[\w.\-]+@[\w.\-]+\/(\d{10,14})/i);
+      m = sms.match(/UPI\/[\w.\-]+@[\w.\-]+\/(\d{10,16})/i);
       if (m) r.upiRefNo = m[1];
 
       // Available Balance
@@ -247,7 +247,7 @@ const bankParsers = [
       if (m) r.amount = parseAmount(m[1]);
 
       // Account
-      m = sms.match(/A\/c\s*(?:X{2,}|x{2,}|\*{2,})(\d{4})/i);
+      m = sms.match(ACCT);
       if (m) r.accountLast4 = m[1];
 
       // Date
@@ -279,7 +279,7 @@ const bankParsers = [
       let m;
 
       // Account
-      m = sms.match(/A\/c\s*(?:X{2,}|x{2,}|\*{2,})(\d{4})/i);
+      m = sms.match(ACCT);
       if (m) r.accountLast4 = m[1];
 
       // Amount
@@ -291,7 +291,7 @@ const bankParsers = [
       if (m) r.date = parseDate(m[1]);
 
       // UPI Ref
-      m = sms.match(/UPI\s*Ref\s*:?\s*(\d{10,14})/i);
+      m = sms.match(UPIREF);
       if (m) r.upiRefNo = m[1];
 
       // VPA  – "VPA:venkatesh@okaxis" or "VPA: venkatesh@okaxis"
@@ -315,7 +315,7 @@ const bankParsers = [
       let m;
 
       // Account
-      m = sms.match(/A\/c\s*(?:X{2,}|x{2,}|\*{2,})(\d{4})/i);
+      m = sms.match(ACCT);
       if (m) r.accountLast4 = m[1];
 
       // Amount
@@ -331,12 +331,53 @@ const bankParsers = [
       if (m) r.senderVPA = m[1];
 
       // UPI Ref
-      m = sms.match(/UPI\s*Ref\s*:?\s*(\d{10,14})/i);
+      m = sms.match(UPIREF);
       if (m) r.upiRefNo = m[1];
 
       // Balance (if present)
       m = sms.match(new RegExp(`(?:Avl\\.?\\s*)?Bal\\.?\\s*:?\\s*${CUR.source}${AMT.source}`, 'i'));
       if (m) r.availableBalance = parseAmount(m[1]);
+
+      r.parsed = !!(r.amount && r.senderVPA);
+      return r;
+    },
+  },
+
+  /* 7 ── IOB (Indian Overseas Bank) ───────────────────────── */
+  {
+    tag: 'IOB',
+    test: (sms) => /IOB|Indian Overseas/i.test(sms) && /credited/i.test(sms),
+    parse(sms) {
+      // "Your a/c no. XXXXX87 is credited by Rs.2020.00 on 2026-06-21 18:36:53.198, from GOGULA VENKATA BALAJI-8019570818@ptyes(-(UPI Ref no 308970720542)).Payer Remark - Sent using Paytm UPI -IOB"
+      const r = emptyResult(sms);
+      r.bankTag = 'IOB';
+
+      let m;
+
+      // Account
+      m = sms.match(ACCT);
+      if (m) r.accountLast4 = m[1];
+
+      // Amount
+      m = sms.match(new RegExp(`credited\\s+(?:by\\s+|with\\s+)?${CUR.source}${AMT.source}`, 'i'));
+      if (m) r.amount = parseAmount(m[1]);
+
+      // Date
+      m = sms.match(/on\s+(\d{4}[-/]\d{2}[-/]\d{2})/i);
+      if (m) r.date = parseDate(m[1]);
+
+      // VPA
+      m = sms.match(/(?:from|by)\s+.*?([^@\n\s]+)@([\w.\-]+)/i);
+      if (m) {
+        r.senderVPA = m[1] + '@' + m[2];
+      } else {
+        m = sms.match(new RegExp(`(?:from|by)?\\s*${VPA.source}`, 'i'));
+        if (m) r.senderVPA = m[1];
+      }
+
+      // UPI Ref
+      m = sms.match(UPIREF);
+      if (m) r.upiRefNo = m[1];
 
       r.parsed = !!(r.amount && r.senderVPA);
       return r;
@@ -356,7 +397,7 @@ function genericParse(sms) {
   if (!/credited/i.test(sms)) return r;
 
   // Account
-  m = sms.match(/A\/c\s*(?:X{2,}|x{2,}|\*{2,})(\d{4})/i);
+  m = sms.match(ACCT);
   if (m) r.accountLast4 = m[1];
 
   // Amount – try "credited by/with Rs.X" first, then "Rs.X credited"
@@ -370,16 +411,21 @@ function genericParse(sms) {
   if (m) r.date = parseDate(m[1]);
 
   // VPA – multiple patterns
-  m = sms.match(new RegExp(`(?:VPA|UPI)\\s*[:/\\-]?\\s*${VPA.source}`, 'i'));
-  if (!m) m = sms.match(new RegExp(`(?:from|by)\\s+${VPA.source}`, 'i'));
-  // Last resort: any @-handle that looks like a UPI VPA (word@word)
-  if (!m) m = sms.match(/([\w.\-]+@(?:ok|pay|upi|ybl|apl|ibl|axl|sbi|icici|paytm)[\w.\-]*)/i);
-  // Absolute fallback: match any email/vpa-like pattern containing @ (e.g. @ptyes)
-  if (!m) m = sms.match(/([\w.\-]+@[\w.\-]+)/);
-  if (m) r.senderVPA = m[1];
+  m = sms.match(/(?:from|by)\s+.*?([^@\n\s]+)@([\w.\-]+)/i);
+  if (m) {
+    r.senderVPA = m[1] + '@' + m[2];
+  } else {
+    m = sms.match(new RegExp(`(?:VPA|UPI)\\s*[:/\\-]?\\s*${VPA.source}`, 'i'));
+    if (!m) m = sms.match(new RegExp(`(?:from|by)\\s+${VPA.source}`, 'i'));
+    // Last resort: any @-handle that looks like a UPI VPA (word@word)
+    if (!m) m = sms.match(/([\w.\-]+@(?:ok|pay|upi|ybl|apl|ibl|axl|sbi|icici|paytm)[\w.\-]*)/i);
+    // Absolute fallback: match any email/vpa-like pattern containing @ (e.g. @ptyes)
+    if (!m) m = sms.match(/([\w.\-]+@[\w.\-]+)/);
+    if (m) r.senderVPA = m[1];
+  }
 
   // UPI Ref
-  m = sms.match(/(?:UPI|Txn|UTR)\s*(?:Ref|No|ID)\s*[:.#]?\s*(\d{10,14})/i);
+  m = sms.match(UPIREF);
   if (m) r.upiRefNo = m[1];
 
   // Balance
@@ -413,7 +459,9 @@ export function parseBankSMS(smsText) {
     return emptyResult(smsText ?? '');
   }
 
-  const trimmed = smsText.trim();
+  // Normalize mathematical alphanumeric symbols and stylized Unicode fonts
+  const normalized = smsText.normalize('NFKD');
+  const trimmed = normalized.trim();
 
   // Try each bank‐specific parser in order
   for (const bp of bankParsers) {
@@ -447,11 +495,26 @@ export function matchVPAToBorrower(vpa, borrowers) {
 
   const needle = vpa.toLowerCase().trim();
 
+  // 1. Try exact match first
   for (const b of borrowers) {
     const vpas = Array.isArray(b.vpa) ? b.vpa : [b.vpa];
     for (const v of vpas) {
       if (v && v.toLowerCase().trim() === needle) {
         return b;
+      }
+    }
+  }
+
+  // 2. Fallback: extract 10-digit phone number from VPA and match against borrowers' phone numbers
+  const phoneMatch = needle.match(/\b\d{10}\b/);
+  if (phoneMatch) {
+    const extractedPhone = phoneMatch[0];
+    for (const b of borrowers) {
+      if (b.phone) {
+        const cleanBPhone = b.phone.replace(/\D/g, ''); // keep only digits
+        if (cleanBPhone.endsWith(extractedPhone)) {
+          return b;
+        }
       }
     }
   }
