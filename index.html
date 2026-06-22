@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LenderBook — Ramaiah Finance</title>
+  <!-- SEO Meta Tags -->
+  <meta name="description" content="LenderBook — a premium and full-featured lender management dashboard for tracking borrowers, loans, repayments, and overdues.">
+  <meta name="author" content="Antigravity Coding Assistant">
+  
+  <!-- Tabler Icons & Stylesheet -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+  <div id="app" style="position:relative; min-height:100vh;">
+    <div id="sidebar">
+      <div id="sidebar-logo">
+        <h1>LenderBook</h1>
+        <p id="lender-name-sidebar">Ramaiah Finance</p>
+      </div>
+      <div class="nav-section">
+        <div class="nav-label" id="nl-overview">Overview</div>
+        <div class="nav-item active" onclick="window.nav('dashboard')" id="nav-dashboard">
+          <i class="ti ti-home" aria-hidden="true"></i>
+          <span id="nt-dashboard">Home</span>
+        </div>
+        <div class="nav-item" onclick="window.nav('calllist')" id="nav-calllist">
+          <i class="ti ti-phone-call" aria-hidden="true"></i>
+          <span id="nt-calllist">Call List</span>
+        </div>
+      </div>
+      <div class="nav-section">
+        <div class="nav-label" id="nl-manage">Manage</div>
+        <div class="nav-item" onclick="window.nav('borrowers')" id="nav-borrowers">
+          <i class="ti ti-users" aria-hidden="true"></i>
+          <span id="nt-borrowers">Borrowers</span>
+        </div>
+        <div class="nav-item" onclick="window.nav('loans')" id="nav-loans">
+          <i class="ti ti-file-invoice" aria-hidden="true"></i>
+          <span id="nt-loans">Loans</span>
+        </div>
+        <div class="nav-item" onclick="window.nav('repayments')" id="nav-repayments">
+          <i class="ti ti-cash" aria-hidden="true"></i>
+          <span id="nt-repayments">Repayments</span>
+        </div>
+      </div>
+
+      <div style="margin-top:auto; padding:16px; border-top:0.5px solid var(--color-border-tertiary);">
+        <div class="nav-item" onclick="window.nav('settings')" id="nav-settings" style="border-radius:var(--border-radius-md);">
+          <i class="ti ti-settings" aria-hidden="true"></i>
+          <span id="nt-settings">Settings</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="main">
+      <div id="topbar">
+        <h2 id="page-title">Dashboard</h2>
+        <div id="topbar-right">
+          <button class="lang-btn active" onclick="window.setLang('en')">EN</button>
+          <button class="lang-btn" onclick="window.setLang('te')">తెలుగు</button>
+          <button class="lang-btn" onclick="window.setLang('hi')">हिन्दी</button>
+          <div class="avatar" id="lender-avatar">R</div>
+        </div>
+      </div>
+      <div id="page"></div>
+    </div>
+
+    <div id="modal-container"></div>
+    <div id="toast"></div>
+  </div>
+
+  <!-- Entrypoint Module Script -->
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
