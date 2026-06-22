@@ -208,13 +208,12 @@ export async function getBorrowers() {
 
 export async function addBorrower(b) {
   if (supabase) {
-    try {
-      const { data, error } = await supabase.from('borrowers').insert([mapBorrowerToDb(b)]).select();
-      if (!error && data.length > 0) return mapBorrowerFromDb(data[0]);
+    const { data, error } = await supabase.from('borrowers').insert([mapBorrowerToDb(b)]).select();
+    if (error) {
       console.error('Supabase add borrower error:', error);
-    } catch (e) {
-      console.error('Supabase error:', e);
+      throw new Error(error.message || 'Failed to add borrower');
     }
+    if (data && data.length > 0) return mapBorrowerFromDb(data[0]);
   }
   const newB = { ...b, id: localBorrowers.length ? Math.max(...localBorrowers.map(x => x.id)) + 1 : 1 };
   localBorrowers.push(newB);
@@ -238,13 +237,12 @@ export async function getLoans() {
 
 export async function addLoan(l) {
   if (supabase) {
-    try {
-      const { data, error } = await supabase.from('loans').insert([mapLoanToDb(l)]).select();
-      if (!error && data.length > 0) return mapLoanFromDb(data[0]);
+    const { data, error } = await supabase.from('loans').insert([mapLoanToDb(l)]).select();
+    if (error) {
       console.error('Supabase add loan error:', error);
-    } catch (e) {
-      console.error('Supabase error:', e);
+      throw new Error(error.message || 'Failed to add loan');
     }
+    if (data && data.length > 0) return mapLoanFromDb(data[0]);
   }
   const newL = { ...l, id: localLoans.length ? Math.max(...localLoans.map(x => x.id)) + 1 : 1 };
   localLoans.push(newL);
@@ -254,13 +252,12 @@ export async function addLoan(l) {
 
 export async function updateLoanStatus(id, status) {
   if (supabase) {
-    try {
-      const { data, error } = await supabase.from('loans').update({ status }).eq('id', id).select();
-      if (!error && data.length > 0) return mapLoanFromDb(data[0]);
+    const { data, error } = await supabase.from('loans').update({ status }).eq('id', id).select();
+    if (error) {
       console.error('Supabase update loan status error:', error);
-    } catch (e) {
-      console.error('Supabase error:', e);
+      throw new Error(error.message || 'Failed to update loan status');
     }
+    if (data && data.length > 0) return mapLoanFromDb(data[0]);
   }
   const idx = localLoans.findIndex(x => x.id === id);
   if (idx !== -1) {
@@ -287,13 +284,12 @@ export async function getRepayments() {
 
 export async function addRepayment(r) {
   if (supabase) {
-    try {
-      const { data, error } = await supabase.from('repayments').insert([mapRepaymentToDb(r)]).select();
-      if (!error && data.length > 0) return mapRepaymentFromDb(data[0]);
+    const { data, error } = await supabase.from('repayments').insert([mapRepaymentToDb(r)]).select();
+    if (error) {
       console.error('Supabase add repayment error:', error);
-    } catch (e) {
-      console.error('Supabase error:', e);
+      throw new Error(error.message || 'Failed to add repayment');
     }
+    if (data && data.length > 0) return mapRepaymentFromDb(data[0]);
   }
   const newR = { ...r, id: localRepayments.length ? Math.max(...localRepayments.map(x => x.id)) + 1 : 1 };
   localRepayments.push(newR);
@@ -317,15 +313,14 @@ export async function getMessages() {
 
 export async function addMessage(m) {
   if (supabase) {
-    try {
-      const { data, error } = await supabase.from('messages').insert([mapMessageToDb(m)]).select();
-      if (!error && data.length > 0) return mapMessageFromDb(data[0]);
+    const { data, error } = await supabase.from('messages').insert([mapMessageToDb(m)]).select();
+    if (error) {
       console.error('Supabase add message error:', error);
-    } catch (e) {
-      console.error('Supabase error:', e);
+      throw new Error(error.message || 'Failed to add message');
     }
+    if (data && data.length > 0) return mapMessageFromDb(data[0]);
   }
-  const newM = { ...m, id: localMsgs.length ? Math.max(...localMsgs.map(x => x.id)) + 1 : 1 };
+  const newM = { ...m, id: localMsgs.length ? Math.max(...localMsgs.map(x => x.id)) + 1 : 1, sentAt: new Date().toISOString() };
   localMsgs.push(newM);
   saveLocal('msgs', localMsgs);
   return newM;
@@ -347,13 +342,12 @@ export async function getUpiPayments() {
 
 export async function addUpiPayment(p) {
   if (supabase) {
-    try {
-      const { data, error } = await supabase.from('upi_auto_payments').insert([mapUpiPaymentToDb(p)]).select();
-      if (!error && data.length > 0) return mapUpiPaymentFromDb(data[0]);
+    const { data, error } = await supabase.from('upi_auto_payments').insert([mapUpiPaymentToDb(p)]).select();
+    if (error) {
       console.error('Supabase add UPI payment error:', error);
-    } catch (e) {
-      console.error('Supabase error:', e);
+      throw new Error(error.message || 'Failed to add UPI payment');
     }
+    if (data && data.length > 0) return mapUpiPaymentFromDb(data[0]);
   }
   const newP = { ...p, id: localUpiPayments.length ? Math.max(...localUpiPayments.map(x => x.id)) + 1 : 1, detectedAt: new Date().toISOString() };
   localUpiPayments.push(newP);
@@ -363,16 +357,15 @@ export async function addUpiPayment(p) {
 
 export async function updateUpiPaymentStatus(id, status, borrowerId, linkedRepaymentId) {
   if (supabase) {
-    try {
-      const updateObj = { status };
-      if (borrowerId !== undefined) updateObj.borrower_id = borrowerId;
-      if (linkedRepaymentId !== undefined) updateObj.linked_repayment_id = linkedRepaymentId;
-      const { data, error } = await supabase.from('upi_auto_payments').update(updateObj).eq('id', id).select();
-      if (!error && data.length > 0) return mapUpiPaymentFromDb(data[0]);
+    const updateObj = { status };
+    if (borrowerId !== undefined) updateObj.borrower_id = borrowerId;
+    if (linkedRepaymentId !== undefined) updateObj.linked_repayment_id = linkedRepaymentId;
+    const { data, error } = await supabase.from('upi_auto_payments').update(updateObj).eq('id', id).select();
+    if (error) {
       console.error('Supabase update UPI payment error:', error);
-    } catch (e) {
-      console.error('Supabase error:', e);
+      throw new Error(error.message || 'Failed to update UPI payment status');
     }
+    if (data && data.length > 0) return mapUpiPaymentFromDb(data[0]);
   }
   const idx = localUpiPayments.findIndex(x => x.id === id);
   if (idx !== -1) {
@@ -388,21 +381,20 @@ export async function updateUpiPaymentStatus(id, status, borrowerId, linkedRepay
 // --- Update borrower (for adding UPI VPA later) ---
 export async function updateBorrower(id, fields) {
   if (supabase) {
-    try {
-      const dbFields = {};
-      if (fields.name !== undefined) dbFields.name = fields.name;
-      if (fields.phone !== undefined) dbFields.phone = fields.phone;
-      if (fields.email !== undefined) dbFields.email = fields.email;
-      if (fields.address !== undefined) dbFields.address = fields.address;
-      if (fields.village !== undefined) dbFields.village = fields.village;
-      if (fields.upiVpa !== undefined) dbFields.upi_vpa = fields.upiVpa;
-      if (fields.isActive !== undefined) dbFields.is_active = fields.isActive;
-      const { data, error } = await supabase.from('borrowers').update(dbFields).eq('id', id).select();
-      if (!error && data.length > 0) return mapBorrowerFromDb(data[0]);
+    const dbFields = {};
+    if (fields.name !== undefined) dbFields.name = fields.name;
+    if (fields.phone !== undefined) dbFields.phone = fields.phone;
+    if (fields.email !== undefined) dbFields.email = fields.email;
+    if (fields.address !== undefined) dbFields.address = fields.address;
+    if (fields.village !== undefined) dbFields.village = fields.village;
+    if (fields.upiVpa !== undefined) dbFields.upi_vpa = fields.upiVpa;
+    if (fields.isActive !== undefined) dbFields.is_active = fields.isActive;
+    const { data, error } = await supabase.from('borrowers').update(dbFields).eq('id', id).select();
+    if (error) {
       console.error('Supabase update borrower error:', error);
-    } catch (e) {
-      console.error('Supabase error:', e);
+      throw new Error(error.message || 'Failed to update borrower');
     }
+    if (data && data.length > 0) return mapBorrowerFromDb(data[0]);
   }
   const idx = localBorrowers.findIndex(x => x.id === id);
   if (idx !== -1) {

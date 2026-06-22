@@ -432,6 +432,39 @@ function sendDirectWhatsApp(borrowerId, encodedMsg) {
   showToast('WhatsApp draft opened!');
 }
 
+function sendAllWhatsAppReminders() {
+  const overdueLoans = loans.filter(l => {
+    const out = calcOutstanding(l);
+    if (out <= 0) return false;
+    const nowStr = new Date().toISOString().split('T')[0];
+    return l.status === 'OVERDUE' || l.status === 'DEFAULTED' || l.dueDate < nowStr;
+  });
+
+  const uniqueBorrowerIds = [...new Set(overdueLoans.map(l => l.borrowerId))];
+  
+  if (uniqueBorrowerIds.length === 0) {
+    showToast('No pending reminders to send.');
+    return;
+  }
+
+  showToast(`Opening ${uniqueBorrowerIds.length} WhatsApp chats... Please allow popups if blocked!`);
+
+  uniqueBorrowerIds.forEach((bid, idx) => {
+    const b = borrowers.find(x => x.id === bid);
+    const l = overdueLoans.find(x => x.borrowerId === bid);
+    if (b && l) {
+      const msg = generateTeluguOverdueMessage(b, l);
+      const phone = b.phone ? b.phone.replace(/\D/g, '') : '';
+      const cleanPhone = phone.startsWith('91') ? phone : '91' + phone;
+      const url = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(msg)}`;
+      
+      setTimeout(() => {
+        window.open(url, '_blank');
+      }, idx * 1200);
+    }
+  });
+}
+
 function sendDirectSMS(borrowerId, encodedMsg) {
   const b = borrowers.find(x => x.id === borrowerId);
   if (!b) return;
@@ -875,10 +908,13 @@ function renderCallList() {
   }).join('');
 
   return `
-  <div style="margin-bottom:16px;">
-    <div style="font-size:13px; color:var(--color-text-secondary);">
+  <div style="margin-bottom:16px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+    <div style="font-size:13px; color:var(--color-text-secondary); max-width:450px;">
       These borrowers have unpaid/overdue cycles. Tap the phone icon to call them directly, or tap "Remind" to send Telugu/manual WhatsApp and SMS notifications.
     </div>
+    <button class="btn btn-sm btn-danger" onclick="window.sendAllWhatsAppReminders()" style="display:inline-flex; align-items:center; gap:6px; font-weight:600; padding:8px 12px; background:#25D366; border-color:#25D366; color:white;">
+      <i class="ti ti-brand-whatsapp" style="font-size:16px;"></i> Send All WhatsApps (One-Click)
+    </button>
   </div>
   <div style="max-width: 640px;">
     ${callListItems}
@@ -1019,7 +1055,7 @@ async function saveBorrower() {
     renderPage('borrowers');
   } catch (e) {
     console.error(e);
-    showToast('Failed to save borrower');
+    showToast('Failed to save borrower: ' + (e.message || e));
     if (saveBtn) {
       saveBtn.disabled = false;
       saveBtn.innerHTML = t('save');
@@ -1200,7 +1236,7 @@ async function saveLoan() {
     renderPage('loans');
   } catch (e) {
     console.error(e);
-    showToast('Failed to save loan');
+    showToast('Failed to save loan: ' + (e.message || e));
     if (saveBtn) {
       saveBtn.disabled = false;
       saveBtn.innerHTML = t('save');
@@ -1643,7 +1679,7 @@ async function confirmUpiPayment(paymentId, borrowerId, btnEl) {
     renderPage('dashboard');
   } catch (e) {
     console.error(e);
-    showToast('Failed to confirm payment');
+    showToast('Failed to confirm payment: ' + (e.message || e));
     if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '<i class="ti ti-check"></i> Confirm & Log'; }
   }
 }
@@ -1770,7 +1806,7 @@ async function assignAndConfirmUpiPayment(paymentId, btnEl) {
     await confirmUpiPayment(paymentId, borrowerId, btnEl);
   } catch (e) {
     console.error(e);
-    showToast('Failed to assign payment');
+    showToast('Failed to assign payment: ' + (e.message || e));
     if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '<i class="ti ti-check"></i> Assign & Log'; }
   }
 }
@@ -1852,6 +1888,7 @@ window.showAssignUpiPayment = showAssignUpiPayment;
 window.doAssignUpiPayment = doAssignUpiPayment;
 window.assignAndConfirmUpiPayment = assignAndConfirmUpiPayment;
 window.updateRepaymentPrefill = updateRepaymentPrefill;
+window.sendAllWhatsAppReminders = sendAllWhatsAppReminders;
 
 function showPasswordLockOverlay() {
   document.getElementById('app').style.filter = 'blur(10px)';
