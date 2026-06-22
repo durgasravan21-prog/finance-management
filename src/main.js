@@ -1175,9 +1175,10 @@ function updateEMIPreview() {
   const cycle = document.getElementById('m-cycle').value;
   const el = document.getElementById('emi-preview');
   if (p && r && n) {
-    const totalPayable = r * n;
+    const roundedN = Math.round(n);
+    const totalPayable = r * roundedN;
     const totalInterest = Math.max(0, totalPayable - p);
-    el.innerHTML = `Repayment: <strong>${fmt(r)}</strong> ${cycle === 'WEEKLY' ? 'weekly' : 'monthly'} · Total payable: <strong>${fmt(totalPayable)}</strong> · Total interest: <strong>${fmt(totalInterest)}</strong>`;
+    el.innerHTML = `Repayment: <strong>${fmt(r)}</strong> ${cycle === 'WEEKLY' ? 'weekly' : 'monthly'} · Total payable: <strong>${fmt(totalPayable)}</strong> · Total interest: <strong>${fmt(totalInterest)}</strong>${n !== roundedN ? ` (Rounded to ${roundedN} cycles)` : ''}`;
   }
   else {
     el.textContent = 'Enter values to see details';
@@ -1195,7 +1196,7 @@ async function saveLoan() {
   try {
     const p = +document.getElementById('m-principal').value;
     const r = +document.getElementById('m-repayment-amount').value;
-    const n = +document.getElementById('m-tenure').value;
+    const n = Math.round(+document.getElementById('m-tenure').value);
     const bid = +document.getElementById('m-bid').value;
     const cycle = document.getElementById('m-cycle').value;
     const start = document.getElementById('m-start').value;
@@ -1544,9 +1545,15 @@ function renderVillageCollection() {
     ${villages.map(v => `<button class="btn btn-sm ${selectedVillage === v ? 'btn-primary' : ''}" onclick="window.selectVillage('${v}')">${v}</button>`).join('')}
   </div>`;
 
+  const todayStr = new Date().toISOString().split('T')[0];
   const villageBorrowers = borrowers.filter(b => {
     if (!b.isActive) return false;
     if (selectedVillage && b.village !== selectedVillage) return false;
+    
+    // Once collected today, remove from this list
+    const hasPaidToday = repayments.some(r => r.borrowerId === b.id && r.paidOn === todayStr);
+    if (hasPaidToday) return false;
+    
     // Only show borrowers with active/overdue loans
     return loans.some(l => l.borrowerId === b.id && ['ACTIVE', 'OVERDUE', 'DEFAULTED'].includes(l.status) && calcOutstanding(l) > 0);
   });
@@ -1630,6 +1637,7 @@ function loadSampleSMS() {
 }
 
 async function confirmUpiPayment(paymentId, borrowerId, btnEl) {
+  const isAssign = btnEl && btnEl.innerHTML.includes('Assign');
   if (btnEl) {
     if (btnEl.disabled) return;
     btnEl.disabled = true;
@@ -1639,7 +1647,10 @@ async function confirmUpiPayment(paymentId, borrowerId, btnEl) {
   try {
     const payment = upiPayments.find(p => p.id === paymentId);
     if (!payment) {
-      if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '<i class="ti ti-check"></i> Confirm & Log'; }
+      if (btnEl) {
+        btnEl.disabled = false;
+        btnEl.innerHTML = isAssign ? '<i class="ti ti-check"></i> Assign & Log' : '<i class="ti ti-check"></i> Confirm & Log';
+      }
       return;
     }
 
@@ -1649,7 +1660,10 @@ async function confirmUpiPayment(paymentId, borrowerId, btnEl) {
     
     if (!activeLoan) {
       showToast('No active loan found for this borrower');
-      if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '<i class="ti ti-check"></i> Confirm & Log'; }
+      if (btnEl) {
+        btnEl.disabled = false;
+        btnEl.innerHTML = isAssign ? '<i class="ti ti-check"></i> Assign & Log' : '<i class="ti ti-check"></i> Confirm & Log';
+      }
       return;
     }
 
@@ -1680,7 +1694,10 @@ async function confirmUpiPayment(paymentId, borrowerId, btnEl) {
   } catch (e) {
     console.error(e);
     showToast('Failed to confirm payment: ' + (e.message || e));
-    if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '<i class="ti ti-check"></i> Confirm & Log'; }
+    if (btnEl) {
+      btnEl.disabled = false;
+      btnEl.innerHTML = isAssign ? '<i class="ti ti-check"></i> Assign & Log' : '<i class="ti ti-check"></i> Confirm & Log';
+    }
   }
 }
 
@@ -1780,17 +1797,10 @@ async function doAssignUpiPayment(paymentId) {
 }
 
 async function assignAndConfirmUpiPayment(paymentId, btnEl) {
-  if (btnEl) {
-    if (btnEl.disabled) return;
-    btnEl.disabled = true;
-    btnEl.innerHTML = '<i class="ti ti-loader rotate"></i> Logging...';
-  }
-  
   try {
     const selectEl = document.getElementById(`upi-assign-${paymentId}`);
     if (!selectEl || !selectEl.value) {
       showToast('Please select a borrower first');
-      if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '<i class="ti ti-check"></i> Assign & Log'; }
       return;
     }
     const borrowerId = +selectEl.value;
@@ -1807,7 +1817,6 @@ async function assignAndConfirmUpiPayment(paymentId, btnEl) {
   } catch (e) {
     console.error(e);
     showToast('Failed to assign payment: ' + (e.message || e));
-    if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = '<i class="ti ti-check"></i> Assign & Log'; }
   }
 }
 
