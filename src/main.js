@@ -1530,6 +1530,9 @@ async function saveRepayment() {
       balanceAfter
     );
 
+    // Copy the receipt image to clipboard immediately while inside the user click gesture!
+    copyImageToClipboard(receiptImgBase64);
+
     const nextRep = await addRepayment({
       loanId,
       borrowerId: loan.borrowerId,
@@ -1548,9 +1551,12 @@ async function saveRepayment() {
 
     // Share receipt automatically
     if (nextRep && nextRep.id) {
-      setTimeout(() => {
-        shareRepaymentReceipt(nextRep.id);
-      }, 500);
+      const cleanPhone = borrowerPhoneStr.replace(/\D/g, '');
+      const finalPhone = cleanPhone.startsWith('91') ? cleanPhone : '91' + cleanPhone;
+      const introMsg = `Dear ${borrowerNameStr}, please find your payment receipt #${receipt} of ${fmt(amt)} attached below. (Please paste the copied receipt image in chat)`;
+      const whatsappUrl = `https://api.whatsapp.com/send?phone=${finalPhone}&text=${encodeURIComponent(introMsg)}`;
+      window.open(whatsappUrl, '_blank');
+      showToast('Receipt image copied to clipboard! Paste (Ctrl+V) in the WhatsApp window.', 6000);
     }
   } catch (e) {
     console.error(e);
@@ -1956,11 +1962,11 @@ function generateReceiptPdf(borrowerName, borrowerPhone, amount, date, method, r
   }
 }
 
-async function copyImageToClipboard(base64DataUrl) {
+function copyImageToClipboard(base64DataUrl) {
   try {
-    const res = await fetch(base64DataUrl);
-    const blob = await res.blob();
-    await navigator.clipboard.write([
+    const base64Data = base64DataUrl.split(',')[1];
+    const blob = base64toBlob(base64Data, 'image/png');
+    navigator.clipboard.write([
       new ClipboardItem({
         'image/png': blob
       })
@@ -1985,10 +1991,16 @@ async function shareRepaymentReceipt(repaymentId) {
   const receiptNo = r.receipt;
   const cleanPhone = b.phone.replace(/\D/g, '');
   const finalPhone = cleanPhone.startsWith('91') ? cleanPhone : '91' + cleanPhone;
-  
+
+  // 1. Desktop/Clipboard Fallback - copy PNG receipt image to clipboard INSTANTLY (before any awaits!)
+  let copied = false;
+  if (r.receiptImage && r.receiptImage.startsWith('data:image/')) {
+    copied = copyImageToClipboard(r.receiptImage);
+  }
+
   const shareMsg = `Dear ${b.name}, payment of ${fmt(r.amount)} received on ${r.paidOn} via ${r.method}. Receipt #${r.receipt}. Thank you! - ${settings.lenderName || "LenderBook"}`;
 
-  // 1. Mobile Web Share API - share PDF file directly
+  // 2. Mobile Web Share API - share PDF file directly
   try {
     const stats = getLoanStats(l);
     const pdfBase64 = generateReceiptPdf(
@@ -2018,13 +2030,7 @@ async function shareRepaymentReceipt(repaymentId) {
       }
     }
   } catch (err) {
-    console.error('Web Share failed, using clipboard fallback:', err);
-  }
-
-  // 2. Desktop/Clipboard Fallback - copy PNG receipt image to clipboard
-  let copied = false;
-  if (r.receiptImage && r.receiptImage.startsWith('data:image/')) {
-    copied = await copyImageToClipboard(r.receiptImage);
+    console.error('Web Share failed:', err);
   }
 
   const introMsg = `Dear ${b.name}, please find your payment receipt #${receiptNo} of ${fmt(r.amount)} attached below. (Please paste the copied receipt image in chat)`;
