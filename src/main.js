@@ -54,7 +54,7 @@ const T = {
     address: 'Address',
     status: 'Status',
     amount: 'Amount (₹)',
-    rate: 'Interest Rate (%/month)',
+    rate: 'Interest (Rs per ₹100/month)',
     tenure: 'Tenure (months)',
     startDate: 'Start Date',
     method: 'Method',
@@ -119,7 +119,7 @@ const T = {
     address: 'చిరునామా',
     status: 'స్థితి',
     amount: 'మొత్తం (₹)',
-    rate: 'వడ్డీ రేటు (%/నెల)',
+    rate: 'వడ్డీ (రూ. ప్రతి ₹100/నెల)',
     tenure: 'వ్యవధి (నెలలు)',
     startDate: 'ప్రారంభ తేదీ',
     method: 'పద్ధతి',
@@ -184,7 +184,7 @@ const T = {
     address: 'पता',
     status: 'स्थिति',
     amount: 'राशि (₹)',
-    rate: 'ब्याज दर (%/माह)',
+    rate: 'ब्याज (रुपये प्रति ₹100/माह)',
     tenure: 'अवधि (महीने)',
     startDate: 'प्रारंभ तिथि',
     method: 'तरीका',
@@ -710,7 +710,7 @@ function renderDashboard() {
       <div class="card-title"><i class="ti ti-calculator"></i> Quick Loan Calculator</div>
       <div class="form-grid" style="gap:8px;">
         <div class="form-row"><label class="form-label">Principal (₹)</label><input type="number" id="calc-principal" value="20000" style="padding:4px 8px; font-size:12px;" /></div>
-        <div class="form-row"><label class="form-label">Rate (%/month)</label><input type="number" id="calc-rate" value="2" step="0.1" style="padding:4px 8px; font-size:12px;" /></div>
+        <div class="form-row"><label class="form-label">Interest (Rs per ₹100/month)</label><input type="number" id="calc-rate" value="2" step="0.1" style="padding:4px 8px; font-size:12px;" /></div>
       </div>
       <div class="form-grid" style="gap:8px; margin-top:4px;">
         <div class="form-row"><label class="form-label">Tenure (months)</label><input type="number" id="calc-tenure" value="10" style="padding:4px 8px; font-size:12px;" /></div>
@@ -726,7 +726,7 @@ function renderDashboard() {
       <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; background:var(--color-background-secondary); padding:8px 10px; border-radius:var(--border-radius-md);">
         <div style="font-size:11px; color:var(--color-text-secondary); line-height:1.4;">
           Payment: <strong id="calc-out-emi" style="color:#185FA5;">₹2,228</strong><br>
-          Total Interest: <span id="calc-out-interest">₹2,284</span>
+          Total Int: <span id="calc-out-interest">₹2,284</span> · Total Pay: <span id="calc-out-payable" style="font-weight:600;">₹22,284</span>
         </div>
         <button class="btn btn-sm btn-primary" onclick="window.prefillCalculatorToLoan()" style="font-size:11px; padding:4px 8px;"><i class="ti ti-file-invoice"></i> Add Loan</button>
       </div>
@@ -892,7 +892,7 @@ function renderBorrowerDetail(id) {
       <div class="card-title">Loans</div>
       ${bLoans.map(l => `<div style="border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 12px;margin-bottom:8px;cursor:pointer" onclick="window.nav('loan-${l.id}')">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-weight:500">${fmt(l.principal)}</span><span class="badge badge-${l.status.toLowerCase()}">${l.status}</span></div>
-        <div style="font-size:12px;color:var(--color-text-secondary)">${l.rate}% / month · ${l.tenure} months · Due ${l.dueDate}</div>
+        <div style="font-size:12px;color:var(--color-text-secondary)">₹${l.rate || 0} interest per ₹100/mo · ${l.tenure} months · Due ${l.dueDate}</div>
         <div style="font-size:12px;color:var(--color-text-tertiary);margin-top:2px">Amount Left to Pay: ${fmt(calcOutstanding(l))}</div>
       </div>`).join('') || '<div class="empty" style="padding:20px">No loans yet</div>'}
     </div>
@@ -965,6 +965,7 @@ function renderLoanDetail(id) {
       <div class="detail-kv"><span class="detail-key">Repayment Cycle</span><span>${l.cycleType === 'WEEKLY' ? 'Weekly' : 'Monthly'}</span></div>
       <div class="detail-kv"><span class="detail-key">Tenure</span><span>${l.tenure} ${l.cycleType === 'WEEKLY' ? 'weeks' : 'months'}</span></div>
       <div class="detail-kv"><span class="detail-key">Repayment Amount</span><span style="font-weight:500">${fmt(l.repaymentAmount)}</span></div>
+      <div class="detail-kv"><span class="detail-key">Interest Rate</span><span>₹${l.rate || 0} per ₹100 per month</span></div>
       
       <div class="detail-kv" style="border-top:1px dashed var(--color-border-secondary); margin-top:8px; padding-top:8px;"><span class="detail-key">Total Payable (with Interest)</span><span style="font-weight:600;">${fmt(stats.totalPayable)}</span></div>
       <div class="detail-kv"><span class="detail-key">Total Interest</span><span style="font-weight:500; color:#BA7517;">${fmt(stats.totalInterest)}</span></div>
@@ -1546,7 +1547,7 @@ function showAddLoan(borrowerId) {
   const options = borrowers.map(b => `<option value="${b.id}" ${b.id === borrowerId ? 'selected' : ''}>${b.name}</option>`).join('');
   document.getElementById('modal-container').innerHTML = `
   <div class="modal-overlay">
-    <div class="modal">
+    <div class="modal" style="width:480px; max-width:95%;">
       <div class="modal-title">${t('addLoan')}<button class="btn btn-sm" onclick="window.closeModal()">✕</button></div>
       <div class="form-row"><label class="form-label">Borrower *</label><select id="m-bid">${options}</select></div>
       <div class="form-grid">
@@ -1560,31 +1561,78 @@ function showAddLoan(borrowerId) {
         </div>
       </div>
       <div class="form-grid">
-        <div class="form-row"><label class="form-label">Repayment Amount (EMI/EWI) *</label><input id="m-repayment-amount" type="number" placeholder="2083" /></div>
+        <div class="form-row">
+          <label class="form-label">Interest Scheme *</label>
+          <select id="m-scheme">
+            <option value="SIMPLE">Simple Interest (per month)</option>
+            <option value="EMI">Monthly EMI (reducing)</option>
+            <option value="DAILY">Flat Rate / Daily Finance</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label class="form-label">Interest (Rs per ₹100/month) *</label>
+          <input id="m-rate" type="number" placeholder="2.0" step="0.1" value="2" />
+        </div>
+      </div>
+      <div class="form-grid">
         <div class="form-row"><label class="form-label">Tenure (Number of Cycles) *</label><input id="m-tenure" type="number" placeholder="6" /></div>
+        <div class="form-row"><label class="form-label">Repayment Amount (EMI/EWI) *</label><input id="m-repayment-amount" type="number" placeholder="calculated..." /></div>
       </div>
       <div class="form-grid">
         <div class="form-row"><label class="form-label">${t('startDate')} *</label><input id="m-start" type="date" value="${new Date().toISOString().split('T')[0]}" /></div>
         <div class="form-row"><label class="form-label">Collateral</label><input id="m-collateral" placeholder="Gold / Land docs / etc." /></div>
       </div>
+      <div class="form-row">
+        <label class="form-label">Notes</label>
+        <textarea id="m-notes" rows="2" placeholder="Any special agreement or notes..."></textarea>
+      </div>
       <div id="emi-preview" style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:10px 12px;font-size:13px;margin-bottom:12px;color:var(--color-text-secondary)">Enter values to see details</div>
       <div style="display:flex;gap:8px"><button class="btn btn-primary" onclick="window.saveLoan()">${t('save')}</button><button class="btn" onclick="window.closeModal()">${t('cancel')}</button></div>
     </div>
   </div>`;
-  ['m-principal', 'm-repayment-amount', 'm-tenure', 'm-cycle'].forEach(id => { document.getElementById(id).addEventListener('input', updateEMIPreview) });
+  const inputs = ['m-principal', 'm-repayment-amount', 'm-tenure', 'm-cycle', 'm-rate', 'm-scheme'];
+  inputs.forEach(id => { document.getElementById(id).addEventListener('input', updateEMIPreview) });
 }
 
-function updateEMIPreview() {
+function updateEMIPreview(e) {
   const p = +document.getElementById('m-principal').value;
-  const r = +document.getElementById('m-repayment-amount').value;
+  const r = +document.getElementById('m-rate').value;
   const n = +document.getElementById('m-tenure').value;
   const cycle = document.getElementById('m-cycle').value;
+  const scheme = document.getElementById('m-scheme').value;
+  const repAmtEl = document.getElementById('m-repayment-amount');
   const el = document.getElementById('emi-preview');
   if (p && r && n) {
     const roundedN = Math.round(n);
-    const totalPayable = r * roundedN;
+    let emi = 0;
+    let totalPayable = 0;
+    const isManualRepayment = e && e.target && e.target.id === 'm-repayment-amount';
+    if (isManualRepayment) {
+      emi = +repAmtEl.value;
+      totalPayable = emi * roundedN;
+    } else {
+      if (scheme === 'EMI') {
+        emi = calcEMI(p, r, roundedN);
+        totalPayable = emi * roundedN;
+      } else if (scheme === 'SIMPLE') {
+        emi = Math.round((p / roundedN) + (p * (r / 100)));
+        totalPayable = emi * roundedN;
+      } else {
+        const totalFlat = p + (p * (r / 100) * roundedN);
+        emi = Math.round(totalFlat / roundedN);
+        totalPayable = totalFlat;
+      }
+      repAmtEl.value = emi;
+    }
     const totalInterest = Math.max(0, totalPayable - p);
-    el.innerHTML = `Repayment: <strong>${fmt(r)}</strong> ${cycle === 'WEEKLY' ? 'weekly' : 'monthly'} · Total payable: <strong>${fmt(totalPayable)}</strong> · Total interest: <strong>${fmt(totalInterest)}</strong>${n !== roundedN ? ` (Rounded to ${roundedN} cycles)` : ''}`;
+    el.innerHTML = `Repayment: <strong>${fmt(emi)}</strong> ${cycle === 'WEEKLY' ? 'weekly' : 'monthly'} · Total payable: <strong>${fmt(totalPayable)}</strong> · Total interest: <strong>${fmt(totalInterest)}</strong>${n !== roundedN ? ` (Rounded to ${roundedN} cycles)` : ''}`;
+  }
+  else if (p && repAmtEl.value && n) {
+    const roundedN = Math.round(n);
+    const emi = +repAmtEl.value;
+    const totalPayable = emi * roundedN;
+    const totalInterest = Math.max(0, totalPayable - p);
+    el.innerHTML = `Repayment: <strong>${fmt(emi)}</strong> ${cycle === 'WEEKLY' ? 'weekly' : 'monthly'} · Total payable: <strong>${fmt(totalPayable)}</strong> · Total interest: <strong>${fmt(totalInterest)}</strong>${n !== roundedN ? ` (Rounded to ${roundedN} cycles)` : ''}`;
   }
   else {
     el.textContent = 'Enter values to see details';
@@ -1601,11 +1649,14 @@ async function saveLoan() {
 
   try {
     const p = +document.getElementById('m-principal').value;
+    const rateVal = +document.getElementById('m-rate').value;
     const r = +document.getElementById('m-repayment-amount').value;
     const n = Math.round(+document.getElementById('m-tenure').value);
     const bid = +document.getElementById('m-bid').value;
     const cycle = document.getElementById('m-cycle').value;
     const start = document.getElementById('m-start').value;
+    const collateral = document.getElementById('m-collateral').value;
+    const notes = document.getElementById('m-notes').value.trim();
     
     if (!p || !r || !n || !bid || !start) { 
       showToast('Please fill all required fields'); 
@@ -1626,13 +1677,13 @@ async function saveLoan() {
     await addLoan({
       borrowerId: bid,
       principal: p,
-      rate: 0,
+      rate: rateVal,
       tenure: n,
       startDate: start,
       dueDate: due.toISOString().split('T')[0],
       status: 'ACTIVE',
-      collateral: document.getElementById('m-collateral').value,
-      notes: '',
+      collateral: collateral,
+      notes: notes,
       cycleType: cycle,
       repaymentAmount: r
     });
@@ -3155,6 +3206,8 @@ function prefillCalculatorToLoan() {
     const repaymentAmountInput = document.getElementById('m-repayment-amount');
     const tenureInput = document.getElementById('m-tenure');
     const cycleInput = document.getElementById('m-cycle');
+    const rateInput = document.getElementById('m-rate');
+    const schemeInput = document.getElementById('m-scheme');
     const notesInput = document.getElementById('m-notes');
     
     if (principalInput) principalInput.value = p;
@@ -3163,8 +3216,10 @@ function prefillCalculatorToLoan() {
     if (cycleInput) {
       cycleInput.value = 'MONTHLY';
     }
+    if (rateInput) rateInput.value = r;
+    if (schemeInput) schemeInput.value = scheme;
     if (notesInput) {
-      notesInput.value = `Interest Scheme: ${scheme} (${r}% per cycle)`;
+      notesInput.value = `Interest Scheme: ${scheme} (₹${r} interest per ₹100/mo)`;
     }
     
     updateEMIPreview();
@@ -3179,6 +3234,7 @@ function runCalculatorLiveCalculation() {
   
   const emiEl = document.getElementById('calc-out-emi');
   const intEl = document.getElementById('calc-out-interest');
+  const payableEl = document.getElementById('calc-out-payable');
   
   if (p && r && t) {
     let emi = 0;
@@ -3197,6 +3253,7 @@ function runCalculatorLiveCalculation() {
     const totalInterest = Math.max(0, totalPayable - p);
     if (emiEl) emiEl.textContent = fmt(emi) + (scheme === 'DAILY' ? ' daily' : ' monthly');
     if (intEl) intEl.textContent = fmt(totalInterest);
+    if (payableEl) payableEl.textContent = fmt(totalPayable);
   }
 }
 
@@ -3211,7 +3268,7 @@ function exportCSV() {
   });
   
   // 2. Loans
-  csv += '\n--- LOANS ---\nID,Borrower Name,Principal,Rate (%),Tenure (months),Repayment EMI,Start Date,Due Date,Status,Collateral,Notes\n';
+  csv += '\n--- LOANS ---\nID,Borrower Name,Principal,Rate (Rs per ₹100 per month),Tenure (months),Repayment EMI,Start Date,Due Date,Status,Collateral,Notes\n';
   loans.forEach(l => {
     csv += `"${l.id}","${borrowerName(l.borrowerId).replace(/"/g, '""')}","${l.principal}","${l.rate}","${l.tenure}","${l.repaymentAmount}","${l.startDate}","${l.dueDate}","${l.status}","${(l.collateral || '').replace(/"/g, '""')}","${(l.notes || '').replace(/"/g, '""')}"\n`;
   });
@@ -3223,10 +3280,15 @@ function exportCSV() {
   });
   
   // 4. Borrowings (Taken)
-  csv += '\n--- BORROWINGS (LOANS TAKEN) ---\nID,Lender Name,Principal,Rate (%),Date Taken,Due Date,Status,Repaid So Far,Outstanding,Notes\n';
+  csv += '\n--- BORROWINGS (LOANS TAKEN) ---\nID,Lender Name,Principal,Rate (Rs per ₹100 per month),Date Taken,Due Date,Status,Repaid So Far,Outstanding,Notes\n';
   borrowings.forEach(b => {
+    const startD = new Date(b.startDate);
+    const dueD = new Date(b.dueDate);
+    const elapsedMonths = Math.max(1, Math.round((dueD - startD) / (1000 * 60 * 60 * 24 * 30.4)));
+    const totInt = b.principal * (b.rate / 100) * elapsedMonths;
+    const totPayable = b.principal + totInt;
     const paid = borrowingRepayments.filter(r => r.borrowingId === b.id).reduce((s, r) => s + r.amount, 0);
-    const outstanding = Math.max(0, b.principal - paid);
+    const outstanding = Math.max(0, totPayable - paid);
     csv += `"${b.id}","${b.lenderName.replace(/"/g, '""')}","${b.principal}","${b.rate}","${b.startDate}","${b.dueDate}","${b.status}","${paid}","${outstanding}","${(b.notes || '').replace(/"/g, '""')}"\n`;
   });
 
@@ -3367,7 +3429,7 @@ async function sharePassbookPdf(borrowerId) {
   doc.text("Loan Account Details:", 110, 46);
   doc.setFont("helvetica", "normal");
   doc.text(`Principal Amount: ${fmt(loan.principal)}`, 110, 52);
-  doc.text(`Interest Rate: ${loan.rate}% per month`, 110, 58);
+  doc.text(`Interest Rate: ₹${loan.rate || 0} per ₹100/mo`, 110, 58);
   doc.text(`Tenure Cycle: ${loan.tenure} months`, 110, 64);
   doc.text(`Start Date: ${loan.startDate}`, 110, 70);
   
@@ -3447,9 +3509,23 @@ function renderBorrowings() {
   const activeB = borrowings.filter(b => b.status === 'ACTIVE');
   const totalBorrowed = borrowings.reduce((s, b) => s + b.principal, 0);
   const totalPaid = borrowingRepayments.reduce((s, r) => s + r.amount, 0);
+  
   const outstandingBorrowed = borrowings.filter(b => b.status === 'ACTIVE').reduce((s, b) => {
+    const startD = new Date(b.startDate);
+    const dueD = new Date(b.dueDate);
+    const elapsedMonths = Math.max(1, Math.round((dueD - startD) / (1000 * 60 * 60 * 24 * 30.4)));
+    const totInt = b.principal * (b.rate / 100) * elapsedMonths;
+    const totPayable = b.principal + totInt;
     const paid = borrowingRepayments.filter(r => r.borrowingId === b.id).reduce((sum, r) => sum + r.amount, 0);
-    return s + Math.max(0, b.principal - paid);
+    return s + Math.max(0, totPayable - paid);
+  }, 0);
+  
+  const totalPayableAll = borrowings.reduce((s, b) => {
+    const startD = new Date(b.startDate);
+    const dueD = new Date(b.dueDate);
+    const elapsedMonths = Math.max(1, Math.round((dueD - startD) / (1000 * 60 * 60 * 24 * 30.4)));
+    const totInt = b.principal * (b.rate / 100) * elapsedMonths;
+    return s + b.principal + totInt;
   }, 0);
   
   // Calculate Net Own Capital
@@ -3462,19 +3538,19 @@ function renderBorrowings() {
   return `
   <div class="stat-grid">
     <div class="stat-card">
-      <div class="stat-label">Total Private Borrowings</div>
+      <div class="stat-label">Total Principal Borrowed</div>
       <div class="stat-value" style="color:#A32D2D">${fmt(totalBorrowed)}</div>
-      <div class="stat-sub" style="color:var(--color-text-tertiary)">from ${borrowings.length} lenders</div>
+      <div class="stat-sub" style="color:var(--color-text-tertiary)">Total Payable: ${fmt(totalPayableAll)}</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Repaid So Far</div>
       <div class="stat-value" style="color:#0F6E56">${fmt(totalPaid)}</div>
-      <div class="stat-sub" style="color:var(--color-text-tertiary)">paid installments</div>
+      <div class="stat-sub" style="color:var(--color-text-tertiary)">paid instalments</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Outstanding Borrowed Dues</div>
       <div class="stat-value" style="color:#BA7517">${fmt(outstandingBorrowed)}</div>
-      <div class="stat-sub" style="color:var(--color-text-tertiary)">to repay</div>
+      <div class="stat-sub" style="color:var(--color-text-tertiary)">to repay (inc. interest)</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Net Own Business Capital</div>
@@ -3494,9 +3570,9 @@ function renderBorrowings() {
         <tr>
           <th>Lender Name</th>
           <th>Principal (₹)</th>
-          <th>Interest Rate</th>
-          <th>Taken Date</th>
-          <th>Due Date</th>
+          <th>Interest (₹100/mo)</th>
+          <th>Time to Repay</th>
+          <th>Total Payable (₹)</th>
           <th>Repaid So Far</th>
           <th>Outstanding</th>
           <th>Status</th>
@@ -3505,15 +3581,20 @@ function renderBorrowings() {
       </thead>
       <tbody>
         ${filtered.length === 0 ? '<tr><td colspan="9" class="empty">No borrowings logged yet.</td></tr>' : filtered.map(b => {
+          const startD = new Date(b.startDate);
+          const dueD = new Date(b.dueDate);
+          const elapsedMonths = Math.max(1, Math.round((dueD - startD) / (1000 * 60 * 60 * 24 * 30.4)));
+          const totInt = b.principal * (b.rate / 100) * elapsedMonths;
+          const totPayable = b.principal + totInt;
           const paid = borrowingRepayments.filter(r => r.borrowingId === b.id).reduce((s, r) => s + r.amount, 0);
-          const out = Math.max(0, b.principal - paid);
+          const out = Math.max(0, totPayable - paid);
           return `
             <tr>
               <td><strong>${b.lenderName}</strong></td>
               <td>${fmt(b.principal)}</td>
-              <td>${b.rate}% /month</td>
-              <td>${b.startDate}</td>
-              <td>${b.dueDate}</td>
+              <td>₹${b.rate} interest</td>
+              <td>${elapsedMonths} months (${b.dueDate})</td>
+              <td style="font-weight:600; color:#185FA5;">${fmt(totPayable)}</td>
               <td style="color:#0F6E56;">${fmt(paid)}</td>
               <td style="font-weight:600; color:${b.status === 'ACTIVE' ? '#BA7517' : '#5F5E5A'};">${fmt(out)}</td>
               <td><span class="badge badge-${b.status.toLowerCase()}">${b.status}</span></td>
@@ -3534,9 +3615,15 @@ function renderBorrowingDetail(id) {
   const b = borrowings.find(x => x.id === id);
   if (!b) return '<div class="empty">Borrowing record not found</div>';
   
+  const startD = new Date(b.startDate);
+  const dueD = new Date(b.dueDate);
+  const elapsedMonths = Math.max(1, Math.round((dueD - startD) / (1000 * 60 * 60 * 24 * 30.4)));
+  const totInt = b.principal * (b.rate / 100) * elapsedMonths;
+  const totPayable = b.principal + totInt;
+  
   const reps = borrowingRepayments.filter(r => r.borrowingId === id).sort((a,b) => new Date(b.paidOn) - new Date(a.paidOn));
   const paid = reps.reduce((s, r) => s + r.amount, 0);
-  const out = Math.max(0, b.principal - paid);
+  const out = Math.max(0, totPayable - paid);
   
   return `
   <div style="margin-bottom:16px;">
@@ -3549,12 +3636,13 @@ function renderBorrowingDetail(id) {
       <div class="detail-section">
         <div class="detail-kv"><span class="detail-key">Lender Name</span><span class="detail-value"><strong>${b.lenderName}</strong></span></div>
         <div class="detail-kv"><span class="detail-key">Principal Amount</span><span class="detail-value">${fmt(b.principal)}</span></div>
-        <div class="detail-kv"><span class="detail-key">Interest Rate</span><span class="detail-value">${b.rate}% per month</span></div>
-        <div class="detail-kv"><span class="detail-key">Taken Date</span><span class="detail-value">${b.startDate}</span></div>
-        <div class="detail-kv"><span class="detail-key">Due/Repay Date</span><span class="detail-value">${b.dueDate}</span></div>
+        <div class="detail-kv"><span class="detail-key">Interest Rate</span><span class="detail-value">₹${b.rate} per ₹100 per month</span></div>
+        <div class="detail-kv"><span class="detail-key">Time to Repay</span><span class="detail-value">${elapsedMonths} months (${b.startDate} to ${b.dueDate})</span></div>
+        <div class="detail-kv"><span class="detail-key">Total Interest Dues</span><span class="detail-value">${fmt(totInt)}</span></div>
+        <div class="detail-kv"><span class="detail-key">Total Payable (Principal + Int)</span><span class="detail-value" style="color:#185FA5; font-weight:700;">${fmt(totPayable)}</span></div>
         <div class="detail-kv"><span class="detail-key">Status</span><span class="detail-value"><span class="badge badge-${b.status.toLowerCase()}">${b.status}</span></span></div>
         <div class="detail-kv"><span class="detail-key">Repaid So Far</span><span class="detail-value" style="color:#0F6E56; font-weight:600;">${fmt(paid)}</span></div>
-        <div class="detail-kv"><span class="detail-key">Outstanding Dues Left</span><span class="detail-value" style="color:#BA7517; font-weight:600;">${fmt(out)}</span></div>
+        <div class="detail-kv"><span class="detail-key">Outstanding Dues Left</span><span class="detail-value" style="color:#BA7517; font-weight:700;">${fmt(out)}</span></div>
         <div class="detail-kv"><span class="detail-key">Notes</span><span class="detail-value">${b.notes || 'None'}</span></div>
       </div>
       
@@ -3600,7 +3688,7 @@ function showAddBorrowing() {
           <input type="number" id="m-borrow-principal" placeholder="50000" />
         </div>
         <div class="form-row">
-          <label class="form-label">Interest Rate (% / month) *</label>
+          <label class="form-label">Interest (Rs per ₹100/month) *</label>
           <input type="number" id="m-borrow-rate" placeholder="2.0" step="0.1" value="2" />
         </div>
       </div>
@@ -3665,8 +3753,13 @@ function showLogBorrowingRepayment(borrowingId) {
   const b = borrowings.find(x => x.id === borrowingId);
   if (!b) return;
   
+  const startD = new Date(b.startDate);
+  const dueD = new Date(b.dueDate);
+  const elapsedMonths = Math.max(1, Math.round((dueD - startD) / (1000 * 60 * 60 * 24 * 30.4)));
+  const totInt = b.principal * (b.rate / 100) * elapsedMonths;
+  const totPayable = b.principal + totInt;
   const paid = borrowingRepayments.filter(r => r.borrowingId === borrowingId).reduce((s, r) => s + r.amount, 0);
-  const out = Math.max(0, b.principal - paid);
+  const out = Math.max(0, totPayable - paid);
 
   document.getElementById('modal-container').innerHTML = `
   <div class="modal-overlay">
@@ -3733,8 +3826,14 @@ function saveBorrowingRepayment(borrowingId) {
   localStorage.setItem('lb_borrowing_repayments', JSON.stringify(borrowingRepayments));
   
   // Check if outstanding is now 0, auto-close
+  const startD = new Date(b.startDate);
+  const dueD = new Date(b.dueDate);
+  const elapsedMonths = Math.max(1, Math.round((dueD - startD) / (1000 * 60 * 60 * 24 * 30.4)));
+  const totInt = b.principal * (b.rate / 100) * elapsedMonths;
+  const totPayable = b.principal + totInt;
+  
   const totalPaid = borrowingRepayments.filter(r => r.borrowingId === borrowingId).reduce((s, r) => s + r.amount, 0);
-  if (totalPaid >= b.principal) {
+  if (totalPaid >= totPayable) {
     const idx = borrowings.findIndex(x => x.id === borrowingId);
     if (idx !== -1) {
       borrowings[idx].status = 'CLOSED';
@@ -3756,8 +3855,14 @@ function deleteBorrowingRepayment(id, borrowingId) {
     
     // Set status back to ACTIVE if not paid off
     const b = borrowings.find(x => x.id === borrowingId);
+    const startD = new Date(b.startDate);
+    const dueD = new Date(b.dueDate);
+    const elapsedMonths = Math.max(1, Math.round((dueD - startD) / (1000 * 60 * 60 * 24 * 30.4)));
+    const totInt = b.principal * (b.rate / 100) * elapsedMonths;
+    const totPayable = b.principal + totInt;
+    
     const paid = borrowingRepayments.filter(r => r.borrowingId === borrowingId).reduce((s, r) => s + r.amount, 0);
-    if (paid < b.principal && b.status === 'CLOSED') {
+    if (paid < totPayable && b.status === 'CLOSED') {
       const idx = borrowings.findIndex(x => x.id === borrowingId);
       if (idx !== -1) {
         borrowings[idx].status = 'ACTIVE';
