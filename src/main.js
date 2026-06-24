@@ -19,7 +19,9 @@ import {
   markSmsProcessed,
   addRawSms,
   subscribeToRealtimeSms,
-  uploadReceiptFile
+  uploadReceiptFile,
+  getOfflinePendingCount,
+  syncOfflineData
 } from './db.js';
 import { parseBankSMS, matchVPAToBorrower, SAMPLE_SMS } from './sms-parser.js';
 import { jsPDF } from 'jspdf';
@@ -89,7 +91,8 @@ const T = {
     allRepayments: 'All Repayments',
     growth: 'Portfolio Growth',
     topBorrowers: 'Top Borrowers by Outstanding',
-    performance: 'Repayment Performance'
+    performance: 'Repayment Performance',
+    borrowings: 'Borrowings'
   },
   te: {
     dashboard: 'హోమ్',
@@ -153,7 +156,8 @@ const T = {
     allRepayments: 'అన్ని చెల్లింపులు',
     growth: 'పోర్ట్‌ఫోలియో వృద్ధి',
     topBorrowers: 'అత్యధిక బకాయి రుణగ్రహీతలు',
-    performance: 'చెల్లింపు పనితీరు'
+    performance: 'చెల్లింపు పనితీరు',
+    borrowings: 'తీసుకున్న అప్పులు'
   },
   hi: {
     dashboard: 'होम',
@@ -217,7 +221,8 @@ const T = {
     allRepayments: 'सभी भुगतान',
     growth: 'पोर्टफोलियो वृद्धि',
     topBorrowers: 'शीर्ष उधारकर्ता',
-    performance: 'भुगतान प्रदर्शन'
+    performance: 'भुगतान प्रदर्शन',
+    borrowings: 'उधार (लिया हुआ)'
   }
 };
 
@@ -242,15 +247,45 @@ let repayments = [];
 let msgs = [];
 let upiPayments = [];
 
+// NEW APP STATE FOR PREMIUM FEATURES
+let borrowings = JSON.parse(localStorage.getItem('lb_borrowings')) || [];
+let borrowingRepayments = JSON.parse(localStorage.getItem('lb_borrowing_repayments')) || [];
+let dailyExpenses = JSON.parse(localStorage.getItem('lb_daily_expenses')) || [];
+let missedReasons = JSON.parse(localStorage.getItem('lb_missed_reasons')) || {};
+let customTemplates = JSON.parse(localStorage.getItem('lb_custom_templates')) || {
+  overdue: 'నమస్కారం {BorrowerName} గారు, మీ లోన్ రసీదు నెం: {ReceiptNo} గడువు తేదీ దాటినది. బకాయి మొత్తం: {OutstandingBal}. దయచేసి వెంటనే చెల్లించగలరు.',
+  receipt: 'నమస్కారం {BorrowerName} గారు, మీ నుండి {Amount} రూ. చెల్లింపు అందుకున్నాము. రసీదు నెం: {ReceiptNo}. బకాయి మొత్తం: {OutstandingBal}. ధన్యవాదాలు.'
+};
+let isListeningSpeech = false;
+
+function updateTopbar() {
+  const tr = document.getElementById('topbar-right');
+  if (!tr) return;
+  const isOnline = navigator.onLine && isDbConnected();
+  const pendingCount = getOfflinePendingCount();
+  let syncBtnHtml = '';
+  if (pendingCount > 0) {
+    syncBtnHtml = `<button class="btn btn-sm btn-warning" onclick="window.triggerOfflineSync()" style="margin-right:8px; display:inline-flex; align-items:center; gap:4px; font-weight:600;"><i class="ti ti-refresh rotate-hover"></i> Sync (${pendingCount})</button>`;
+  }
+  const statusHtml = isOnline 
+    ? `<span class="badge badge-active" style="display:inline-flex; align-items:center; gap:4px; margin-right:8px;"><span class="pulse-dot" style="background:#639922"></span> Online</span>`
+    : `<span class="badge badge-defaulted" style="display:inline-flex; align-items:center; gap:4px; margin-right:8px;"><span class="pulse-dot" style="background:#A32D2D"></span> Offline</span>`;
+  const micHtml = `<button class="btn btn-sm ${isListeningSpeech ? 'btn-danger pulsing' : ''}" onclick="window.startVoiceSearch()" style="margin-right:8px; border-radius:50%; width:32px; height:32px; padding:0; display:inline-flex; align-items:center; justify-content:center;" title="Voice command/search"><i class="ti ti-microphone" style="font-size:16px;"></i></button>`;
+  tr.innerHTML = `
+    ${syncBtnHtml}
+    ${statusHtml}
+    ${micHtml}
+    <button class="lang-btn ${lang === 'en' ? 'active' : ''}" onclick="window.setLang('en')">EN</button>
+    <button class="lang-btn ${lang === 'te' ? 'active' : ''}" onclick="window.setLang('te')">తెలుగు</button>
+    <button class="lang-btn ${lang === 'hi' ? 'active' : ''}" onclick="window.setLang('hi')">हिन्दी</button>
+    <div class="avatar" id="lender-avatar">${settings.lenderName ? settings.lenderName.charAt(0).toUpperCase() : 'R'}</div>
+  `;
+}
+
 function updateLenderNameUI() {
   const nameSidebar = document.getElementById('lender-name-sidebar');
   if (nameSidebar) nameSidebar.textContent = settings.lenderName;
-  
-  const avatar = document.getElementById('lender-avatar');
-  if (avatar && settings.lenderName) {
-    avatar.textContent = settings.lenderName.charAt(0).toUpperCase();
-  }
-  
+  updateTopbar();
   document.title = 'LenderBook — ' + settings.lenderName;
 }
 
@@ -259,7 +294,6 @@ const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 
 // --- CALCULATION HELPERS ---
 function calcEMI(p, r, n) {
-  // Backwards compatibility fallback if needed
   const rm = (r || 2.0) / 100;
   return Math.round(p * rm * Math.pow(1 + rm, n) / (Math.pow(1 + rm, n) - 1));
 }
@@ -300,14 +334,12 @@ function t(k) {
 async function processIncomingSmsRow(row) {
   const result = parseBankSMS(row.sms_text);
   if (result.parsed && result.amount) {
-    // Try to match VPA to a borrower
     let matchedBorrowerId = null;
     if (result.senderVPA) {
       const matched = matchVPAToBorrower(result.senderVPA, borrowers.map(b => ({ ...b, vpa: b.upiVpa })));
       if (matched) matchedBorrowerId = matched.id;
     }
 
-    // Add to UPI auto payments
     await addUpiPayment({
       borrowerId: matchedBorrowerId,
       amount: result.amount,
@@ -323,7 +355,6 @@ async function processIncomingSmsRow(row) {
       showToast(`Auto-detected SMS payment: ${fmt(result.amount)} (Unknown sender)`);
     }
   }
-  // Always mark as processed so we don't scan it again
   await markSmsProcessed(row.id);
 }
 
@@ -340,23 +371,28 @@ async function processUnprocessedSms() {
   }
 }
 
-
 // --- DB SYNC HELPERS ---
 async function refreshData() {
   borrowers = await getBorrowers();
-  
-  // Auto-detect and parse any unprocessed incoming SMS
   await processUnprocessedSms();
-
   loans = await getLoans();
   repayments = await getRepayments();
   msgs = await getMessages();
   upiPayments = await getUpiPayments();
 
+  // Load new premium local data features
+  borrowings = JSON.parse(localStorage.getItem('lb_borrowings')) || [];
+  borrowingRepayments = JSON.parse(localStorage.getItem('lb_borrowing_repayments')) || [];
+  dailyExpenses = JSON.parse(localStorage.getItem('lb_daily_expenses')) || [];
+  missedReasons = JSON.parse(localStorage.getItem('lb_missed_reasons')) || {};
+  customTemplates = JSON.parse(localStorage.getItem('lb_custom_templates')) || {
+    overdue: 'నమస్కారం {BorrowerName} గారు, మీ లోన్ రసీదు నెం: {ReceiptNo} గడువు తేదీ దాటినది. బకాయి మొత్తం: {OutstandingBal}. దయచేసి వెంటనే చెల్లించగలరు.',
+    receipt: 'నమస్కారం {BorrowerName} గారు, మీ నుండి {Amount} రూ. చెల్లింపు అందుకున్నాము. రసీదు నెం: {ReceiptNo}. బకాయి మొత్తం: {OutstandingBal}. ధన్యవాదాలు.'
+  };
 
-  // When Supabase is connected, clear stale localStorage caches
-  // so phantom duplicates from old offline sessions never resurface
-  if (isDbConnected()) {
+  // Only clear local storage if Supabase is connected AND there are no unsynced changes.
+  // This completely eliminates risk of deleting offline data!
+  if (isDbConnected() && getOfflinePendingCount() === 0) {
     localStorage.removeItem('lb_borrowers');
     localStorage.removeItem('lb_loans');
     localStorage.removeItem('lb_repayments');
@@ -418,7 +454,7 @@ function setLang(l) {
   if (nlComm) nlComm.textContent = t('comm');
   document.getElementById('nl-overview').textContent = t('overview');
   document.getElementById('nl-manage').textContent = t('manage');
-  ['dashboard', 'calllist', 'borrowers', 'loans', 'repayments', 'messages', 'settings'].forEach(p => {
+  ['dashboard', 'calllist', 'borrowers', 'loans', 'repayments', 'messages', 'settings', 'borrowings'].forEach(p => {
     const el = document.getElementById('nt-' + p);
     if (el) el.textContent = t(p);
   });
@@ -443,8 +479,10 @@ function renderPage(page) {
   else if (page === 'messages') el.innerHTML = renderMessages();
   else if (page === 'calllist') el.innerHTML = renderCallList();
   else if (page === 'settings') el.innerHTML = renderSettings();
+  else if (page === 'borrowings') el.innerHTML = renderBorrowings();
   else if (page.startsWith('borrower-')) el.innerHTML = renderBorrowerDetail(+page.split('-')[1]);
   else if (page.startsWith('loan-')) el.innerHTML = renderLoanDetail(+page.split('-')[1]);
+  else if (page.startsWith('borrowing-')) el.innerHTML = renderBorrowingDetail(+page.split('-')[1]);
   bindEvents(page);
 }
 
@@ -559,6 +597,7 @@ function renderDashboard() {
     return l.status === 'OVERDUE' || l.status === 'DEFAULTED' || l.dueDate < nowStr;
   });
   const totalOutstanding = activeLoans.reduce((s, l) => s + calcOutstanding(l), 0);
+  
   const now = new Date();
   const cm = now.getMonth(), cy = now.getFullYear();
   const monthRep = repayments.filter(r => {
@@ -568,6 +607,40 @@ function renderDashboard() {
   const monthIncome = monthRep.reduce((s, r) => s + r.amount, 0);
   const recentRep = repayments.slice().sort((a, b) => new Date(b.paidOn) - new Date(a.paidOn)).slice(0, 5);
 
+  const todayStr = new Date().toISOString().split('T')[0];
+  const todayRepayments = repayments.filter(r => r.paidOn === todayStr);
+  const todayCollected = todayRepayments.reduce((s, r) => s + r.amount, 0);
+  
+  const todayExps = dailyExpenses.filter(e => e.date === todayStr);
+  const todayExpensesTotal = todayExps.reduce((s, e) => s + e.amount, 0);
+  const netCashInHand = todayCollected - todayExpensesTotal;
+
+  // Expected cash route remaining
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const todayDay = days[now.getDay()];
+  const routeBorrowers = borrowers.filter(b => {
+    if (!b.isActive) return false;
+    const hasPaidToday = repayments.some(r => r.borrowerId === b.id && r.paidOn === todayStr);
+    if (hasPaidToday) return false;
+    if (b.collectionDay && b.collectionDay !== 'Any Day' && b.collectionDay !== todayDay) return false;
+    return loans.some(l => l.borrowerId === b.id && ['ACTIVE', 'OVERDUE', 'DEFAULTED'].includes(l.status) && calcOutstanding(l) > 0);
+  });
+  const routeBorrowersPaid = borrowers.filter(b => {
+    if (!b.isActive) return false;
+    const hasPaidToday = repayments.some(r => r.borrowerId === b.id && r.paidOn === todayStr);
+    if (!hasPaidToday) return false;
+    if (b.collectionDay && b.collectionDay !== 'Any Day' && b.collectionDay !== todayDay) return false;
+    return loans.some(l => l.borrowerId === b.id && ['ACTIVE', 'OVERDUE', 'DEFAULTED'].includes(l.status));
+  });
+  const routeExpectedLeft = routeBorrowers.reduce((s, b) => {
+    const bLoans = loans.filter(l => l.borrowerId === b.id && ['ACTIVE', 'OVERDUE', 'DEFAULTED'].includes(l.status));
+    return s + bLoans.reduce((sum, l) => sum + (l.repaymentAmount || 0), 0);
+  }, 0);
+  const totalRouteCount = routeBorrowers.length + routeBorrowersPaid.length;
+  const completedRouteCount = routeBorrowersPaid.length;
+  const progressPercent = totalRouteCount > 0 ? Math.round((completedRouteCount / totalRouteCount) * 100) : 0;
+
+  // Month-by-month bar chart data
   const monthData = [];
   for (let i = 5; i >= 0; i--) {
     const d = new Date(cy, cm - i, 1);
@@ -597,9 +670,111 @@ function renderDashboard() {
   <div class="stat-grid">
     <div class="stat-card"><div class="stat-label">${t('totalLoans')}</div><div class="stat-value">${activeLoans.length}</div><div class="stat-sub" style="color:#3B6D11">+${loans.filter(l => l.status === 'ACTIVE').length} active</div></div>
     <div class="stat-card"><div class="stat-label">${t('outstanding')}</div><div class="stat-value" style="font-size:18px">${fmt(totalOutstanding)}</div><div class="stat-sub" style="color:var(--color-text-tertiary)">across ${activeLoans.length} loans</div></div>
-    <div class="stat-card"><div class="stat-label">${t('monthIncome')}</div><div class="stat-value" style="font-size:18px;color:#185FA5">${fmt(monthIncome)}</div><div class="stat-sub" style="color:var(--color-text-tertiary)">${months[cm]} ${cy}</div></div>
-    <div class="stat-card"><div class="stat-label">${t('overdue')}</div><div class="stat-value" style="color:#A32D2D">${overdueLoans.length}</div><div class="stat-sub" style="color:#A32D2D">needs attention</div></div>
+    <div class="stat-card">
+      <div class="stat-label">Net Cash in Hand</div>
+      <div class="stat-value" style="font-size:18px;color:#185FA5">${fmt(netCashInHand)}</div>
+      <div class="stat-sub" style="color:var(--color-text-tertiary)">Col: ${fmt(todayCollected)} · Exp: ${fmt(todayExpensesTotal)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Expected Dues Left Today</div>
+      <div class="stat-value" style="color:#BA7517">${fmt(routeExpectedLeft)}</div>
+      <div class="stat-sub" style="color:var(--color-text-tertiary)">Progress: ${completedRouteCount}/${totalRouteCount} (${progressPercent}%)</div>
+    </div>
   </div>
+
+  <div class="grid2">
+    <!-- Daily Cash Book & Progress Widget -->
+    <div class="card">
+      <div class="card-title"><i class="ti ti-notebook"></i> Daily Cash Book & Route Progress</div>
+      <div style="display:flex; gap:16px; align-items:center; margin-bottom:12px;">
+        <div style="position:relative; width:80px; height:80px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+          <svg width="80" height="80" viewBox="0 0 80 80">
+            <circle cx="40" cy="40" r="34" fill="none" stroke="var(--color-border-secondary)" stroke-width="8"></circle>
+            <circle cx="40" cy="40" r="34" fill="none" stroke="#185FA5" stroke-width="8" stroke-dasharray="213.6" stroke-dashoffset="${213.6 - (213.6 * progressPercent / 100)}" transform="rotate(-90 40 40)" stroke-linecap="round" style="transition: stroke-dashoffset 0.3s;"></circle>
+          </svg>
+          <div style="position:absolute; font-size:14px; font-weight:700;">${progressPercent}%</div>
+        </div>
+        <div>
+          <div style="font-size:13px; color:var(--color-text-secondary); line-height:1.5;">
+            Today's route completed: <strong>${completedRouteCount}</strong> of <strong>${totalRouteCount}</strong> borrowers.
+          </div>
+          <div style="margin-top:6px; font-size:12px; color:var(--color-text-tertiary);">
+            Expected cash to collect: <strong>${fmt(routeExpectedLeft + todayCollected)}</strong> · Remaining: <strong>${fmt(routeExpectedLeft)}</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick Interest & Loan Calculator Widget -->
+    <div class="card">
+      <div class="card-title"><i class="ti ti-calculator"></i> Quick Loan Calculator</div>
+      <div class="form-grid" style="gap:8px;">
+        <div class="form-row"><label class="form-label">Principal (₹)</label><input type="number" id="calc-principal" value="20000" style="padding:4px 8px; font-size:12px;" /></div>
+        <div class="form-row"><label class="form-label">Rate (%/month)</label><input type="number" id="calc-rate" value="2" step="0.1" style="padding:4px 8px; font-size:12px;" /></div>
+      </div>
+      <div class="form-grid" style="gap:8px; margin-top:4px;">
+        <div class="form-row"><label class="form-label">Tenure (months)</label><input type="number" id="calc-tenure" value="10" style="padding:4px 8px; font-size:12px;" /></div>
+        <div class="form-row">
+          <label class="form-label">Interest Scheme</label>
+          <select id="calc-scheme" style="padding:4px 8px; font-size:12px; height:28px;">
+            <option value="EMI">Monthly EMI (reducing)</option>
+            <option value="SIMPLE">Simple Interest (per month)</option>
+            <option value="DAILY">Daily Finance Installment</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; background:var(--color-background-secondary); padding:8px 10px; border-radius:var(--border-radius-md);">
+        <div style="font-size:11px; color:var(--color-text-secondary); line-height:1.4;">
+          Payment: <strong id="calc-out-emi" style="color:#185FA5;">₹2,228</strong><br>
+          Total Interest: <span id="calc-out-interest">₹2,284</span>
+        </div>
+        <button class="btn btn-sm btn-primary" onclick="window.prefillCalculatorToLoan()" style="font-size:11px; padding:4px 8px;"><i class="ti ti-file-invoice"></i> Add Loan</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <!-- Daily Expense Ledger (Diary) -->
+    <div class="card">
+      <div class="card-title"><i class="ti ti-wallet"></i> Daily Expense Ledger</div>
+      <div style="display:flex; gap:6px; margin-bottom:10px;">
+        <input type="number" id="exp-amount" placeholder="Amount (₹)" style="flex:2; padding:6px; font-size:12px;" />
+        <input type="text" id="exp-desc" placeholder="Category (e.g. Petrol, Tea)" style="flex:3; padding:6px; font-size:12px;" />
+        <button class="btn btn-sm btn-primary" onclick="window.saveExpense()"><i class="ti ti-plus"></i> Log</button>
+      </div>
+      <div style="max-height:100px; overflow-y:auto; font-size:12px; border-top:0.5px solid var(--color-border-tertiary); padding-top:6px;">
+        ${todayExps.length === 0 ? '<div style="color:var(--color-text-tertiary); text-align:center; padding:8px 0;">No expenses logged today.</div>' : todayExps.map(e => `
+          <div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:0.5px solid var(--color-border-tertiary);">
+            <span>${e.desc}</span>
+            <span style="font-weight:600; color:#A32D2D;">-${fmt(e.amount)} <a href="#" onclick="window.deleteExpense(${e.id})" style="color:var(--color-text-tertiary); font-size:10px; margin-left:6px; text-decoration:none;">✕</a></span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+
+    <!-- Interactive SMS Reconciliation Feed -->
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+        <div class="card-title" style="margin-bottom:0; color:#534AB7;">
+          <i class="ti ti-credit-card" aria-hidden="true"></i> UPI Auto-Detection Feed
+        </div>
+      </div>
+      <div style="background:var(--color-background-secondary); border-radius:var(--border-radius-md); padding:12px; margin-bottom:12px;">
+        <label class="form-label" style="font-weight:600; margin-bottom:6px; font-size:11px;">Paste Bank SMS here</label>
+        <textarea id="sms-paste-input" rows="2" placeholder="A/c XX1234 credited Rs.2500 on 22-Jun by VPA venkatesh@okaxis" style="font-size:11px;"></textarea>
+        <div style="display:flex; gap:6px; margin-top:6px;">
+          <button class="btn btn-sm btn-primary" onclick="window.handleSMSPaste()" style="font-size:11px; padding:3px 8px;">
+            <i class="ti ti-scan" aria-hidden="true"></i> Detect
+          </button>
+          <button class="btn btn-sm" onclick="window.loadSampleSMS()" style="font-size:11px; padding:3px 8px;">
+            <i class="ti ti-test-pipe" aria-hidden="true"></i> Sample
+          </button>
+        </div>
+      </div>
+      ${renderUpiPendingPayments()}
+    </div>
+  </div>
+
   <div class="grid2">
     <div class="card">
       <div class="card-title">${t('monthlyIncome')}</div>
@@ -616,12 +791,14 @@ function renderDashboard() {
       </div>
     </div>
   </div>
+
   <div class="card">
     <div class="card-title">${t('recentRepayments')}</div>
     <table><thead><tr><th>${t('name')}</th><th>${t('paid')}</th><th>${t('on')}</th><th>${t('method')}</th><th>${t('receipt')}</th></tr></thead><tbody>
     ${recentRep.map(r => `<tr><td>${borrowerName(r.borrowerId)}</td><td>${fmt(r.amount)}</td><td>${r.paidOn}</td><td><span class="badge badge-${r.method.toLowerCase()}">${r.method}</span></td><td style="color:var(--color-text-tertiary);font-size:11px">${r.receipt}</td></tr>`).join('')}
     </tbody></table>
   </div>
+
   ${overdueLoans.length ? `
   <div class="card">
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
@@ -649,34 +826,12 @@ function renderDashboard() {
     </table>
   </div>` : ''}
 
-  <div class="grid2">
-    <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
-        <div class="card-title" style="margin-bottom:0; color:#534AB7;">
-          <i class="ti ti-credit-card" aria-hidden="true"></i> UPI Auto-Detection
-        </div>
-      </div>
-      <div style="background:var(--color-background-secondary); border-radius:var(--border-radius-md); padding:12px; margin-bottom:12px;">
-        <label class="form-label" style="font-weight:600; margin-bottom:6px;">Paste Bank SMS here</label>
-        <textarea id="sms-paste-input" rows="3" placeholder="Paste bank credit SMS here...\ne.g. A/c XX1234 credited Rs.2500.00 on 22-Jun by VPA venkatesh@okaxis" style="font-size:12px;"></textarea>
-        <div style="display:flex; gap:8px; margin-top:8px;">
-          <button class="btn btn-sm btn-primary" onclick="window.handleSMSPaste()">
-            <i class="ti ti-scan" aria-hidden="true"></i> Detect Payment
-          </button>
-          <button class="btn btn-sm" onclick="window.loadSampleSMS()">
-            <i class="ti ti-test-pipe" aria-hidden="true"></i> Load Sample
-          </button>
-        </div>
-      </div>
-      ${renderUpiPendingPayments()}
+  <!-- Village-Grouped Route Checklist -->
+  <div class="card">
+    <div class="card-title" style="color:#185FA5; margin-bottom:12px;">
+      <i class="ti ti-map-pin" aria-hidden="true"></i> Today's Route Checklist (Grouped by Village)
     </div>
-
-    <div class="card">
-      <div class="card-title" style="color:#185FA5;">
-        <i class="ti ti-map-pin" aria-hidden="true"></i> Today's Village Collection
-      </div>
-      ${renderVillageCollection()}
-    </div>
+    ${renderVillageCollection()}
   </div>
   `;
 }
@@ -1030,58 +1185,110 @@ window.handleBadgeClick = handleBadgeClick;
 function renderSettings() {
   const dbConnected = isDbConnected();
   const dbCreds = getCredentials();
+  
+  // Render raw SMS logs for settings viewer
+  const rawSmsLocal = JSON.parse(localStorage.getItem('lb_raw_sms')) || [];
+  const rawSmsHtml = rawSmsLocal.length === 0 
+    ? '<div style="color:var(--color-text-tertiary); text-align:center; padding:8px 0; font-size:11px;">No SMS logs found.</div>'
+    : rawSmsLocal.slice(-15).reverse().map(sms => `
+      <div style="font-size:11px; padding:6px; border-bottom:0.5px solid var(--color-border-secondary); display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+        <div style="word-break:break-all;">
+          <strong>${sms.sender || 'SMS'}</strong>: "${sms.sms_text}"
+          <div style="color:var(--color-text-tertiary); font-size:9px; margin-top:2px;">Received: ${new Date(sms.received_at || Date.now()).toLocaleTimeString()} · Processed: ${sms.processed ? 'Yes' : 'No'}</div>
+        </div>
+        <a href="#" onclick="window.deleteRawSmsLog(${sms.id})" style="color:#A32D2D; text-decoration:none; font-weight:700;" title="Delete log">✕</a>
+      </div>
+    `).join('');
+
   return `
-  <div class="card" style="max-width:480px">
-    <div class="card-title">${t('settingsTitle')}</div>
-    <div class="form-row"><label class="form-label">${t('lenderName')}</label><input id="s-lenderName" value="${settings.lenderName}" /></div>
-    <div class="form-row"><label class="form-label">Father's WhatsApp Number</label><input id="s-fatherPhone" value="${settings.fatherPhone || ''}" placeholder="e.g. 919876543210" /></div>
-    <div class="form-row"><label class="form-label">${t('language')}</label>
-      <select id="s-lang"><option value="en" ${lang === 'en' ? 'selected' : ''}>English</option><option value="te" ${lang === 'te' ? 'selected' : ''}>తెలుగు</option><option value="hi" ${lang === 'hi' ? 'selected' : ''}>हिन्दी</option></select>
-    </div>
-    
-    <div style="border-top:0.5px solid var(--color-border-tertiary); padding-top:14px; margin-top:14px;">
-      <div class="card-title" style="margin-bottom:6px; color:#534AB7;">
-        <i class="ti ti-credit-card"></i> UPI Auto-Detection Settings
-      </div>
-      <div style="background:#EEEDFE; border-radius:var(--border-radius-md); padding:10px 12px; font-size:12px; color:#534AB7; margin-bottom:12px; line-height:1.5;">
-        <strong>How it works:</strong> Your father opens a dedicated bank account for lending. All borrowers pay to that UPI ID. When the bank sends an SMS for each credit, paste it in the Dashboard to auto-detect who paid and how much.
-      </div>
-      <div class="form-row"><label class="form-label">Father's Dedicated UPI ID</label><input id="s-fatherUpiId" value="${settings.fatherUpiId || ''}" placeholder="e.g. ramaiah@sbi" /></div>
-      <div class="form-row">
-        <label class="form-label">Auto-Detection</label>
-        <select id="s-upiAutoDetect">
-          <option value="true" ${settings.upiAutoDetect ? 'selected' : ''}>Enabled — Parse bank SMS automatically</option>
-          <option value="false" ${!settings.upiAutoDetect ? 'selected' : ''}>Disabled</option>
-        </select>
-      </div>
-      <div style="background:var(--color-background-secondary); border-radius:var(--border-radius-md); padding:10px 12px; font-size:11px; color:var(--color-text-tertiary); line-height:1.5;">
-        <i class="ti ti-info-circle"></i> <strong>For full Android automation:</strong> An Android companion app is needed to auto-read bank SMS. Currently, you can paste SMS manually on the Dashboard. Add each borrower's UPI VPA in their profile for auto-matching.
+  <div class="grid2">
+    <div>
+      <div class="card">
+        <div class="card-title">${t('settingsTitle')}</div>
+        <div class="form-row"><label class="form-label">${t('lenderName')}</label><input id="s-lenderName" value="${settings.lenderName}" /></div>
+        <div class="form-row"><label class="form-label">Father's WhatsApp Number</label><input id="s-fatherPhone" value="${settings.fatherPhone || ''}" placeholder="e.g. 919876543210" /></div>
+        <div class="form-row"><label class="form-label">${t('language')}</label>
+          <select id="s-lang"><option value="en" ${lang === 'en' ? 'selected' : ''}>English</option><option value="te" ${lang === 'te' ? 'selected' : ''}>తెలుగు</option><option value="hi" ${lang === 'hi' ? 'selected' : ''}>हिन्दी</option></select>
+        </div>
+        
+        <div style="border-top:0.5px solid var(--color-border-tertiary); padding-top:14px; margin-top:14px;">
+          <div class="card-title" style="margin-bottom:6px; color:#534AB7;">
+            <i class="ti ti-credit-card"></i> UPI Auto-Detection Settings
+          </div>
+          <div class="form-row"><label class="form-label">Father's Dedicated UPI ID</label><input id="s-fatherUpiId" value="${settings.fatherUpiId || ''}" placeholder="e.g. ramaiah@sbi" /></div>
+          <div class="form-row">
+            <label class="form-label">Auto-Detection</label>
+            <select id="s-upiAutoDetect">
+              <option value="true" ${settings.upiAutoDetect ? 'selected' : ''}>Enabled — Parse bank SMS automatically</option>
+              <option value="false" ${!settings.upiAutoDetect ? 'selected' : ''}>Disabled</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="border-top:0.5px solid var(--color-border-tertiary); padding-top:14px; margin-top:14px;">
+          <div class="card-title" style="margin-bottom:6px;">Database Connection (Supabase)</div>
+          <div style="margin-bottom: 12px; font-size: 12px; cursor: pointer;" onclick="window.handleBadgeClick()">
+            ${dbConnected 
+              ? '<span class="badge badge-active" style="display:inline-flex; align-items:center; gap:4px;"><i class="ti ti-database-check"></i> Connected & Syncing with Supabase</span>' 
+              : '<span class="badge badge-defaulted" style="display:inline-flex; align-items:center; gap:4px;"><i class="ti ti-database-x"></i> Offline Mode: Using LocalStorage</span>'}
+          </div>
+          <div id="dev-creds-container" style="display:none;">
+            <div class="form-row"><label class="form-label">Supabase Project URL</label><input id="s-dbUrl" value="${dbCreds.url}" placeholder="https://xxxx.supabase.co" /></div>
+            <div class="form-row"><label class="form-label">Supabase Anon Key</label><input id="s-dbKey" type="password" value="${dbCreds.key}" placeholder="Supabase Anon Key" /></div>
+          </div>
+        </div>
+
+        <div style="border-top:0.5px solid var(--color-border-tertiary);padding-top:14px;margin-top:14px">
+          <div class="card-title" style="margin-bottom:12px">App Access Password Lock</div>
+          <div class="form-row"><label class="form-label">Password Lock</label><input type="password" id="s-app-password" value="${settings.appPassword || ''}" placeholder="Set password" /></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:14px;">
+          <button class="btn btn-primary" onclick="window.saveSettings()">${t('save')}</button>
+        </div>
       </div>
     </div>
 
+    <div>
+      <!-- Custom Telugu Templates Card -->
+      <div class="card">
+        <div class="card-title" style="color:#185FA5;"><i class="ti ti-message"></i> Custom message templates (Telugu/English)</div>
+        <div class="form-row">
+          <label class="form-label">Overdue Reminder Template</label>
+          <textarea id="s-template-overdue" rows="3" style="font-size:12px;">${customTemplates.overdue}</textarea>
+        </div>
+        <div class="form-row">
+          <label class="form-label">Repayment Confirmation Template</label>
+          <textarea id="s-template-receipt" rows="3" style="font-size:12px;">${customTemplates.receipt}</textarea>
+        </div>
+        <div style="background:var(--color-background-secondary); border-radius:var(--border-radius-md); padding:8px 10px; font-size:10px; color:var(--color-text-tertiary); line-height:1.5;">
+          <strong>Available tags:</strong> {BorrowerName}, {Amount}, {ReceiptNo}, {OutstandingBal}
+        </div>
+      </div>
 
-    <div style="border-top:0.5px solid var(--color-border-tertiary); padding-top:14px; margin-top:14px;">
-      <div class="card-title" style="margin-bottom:6px;">Database Connection (Supabase)</div>
-      <div style="margin-bottom: 12px; font-size: 12px; cursor: pointer;" onclick="window.handleBadgeClick()">
-        ${dbConnected 
-          ? '<span class="badge badge-active" style="display:inline-flex; align-items:center; gap:4px;"><i class="ti ti-database-check"></i> Connected & Syncing with Supabase</span>' 
-          : '<span class="badge badge-defaulted" style="display:inline-flex; align-items:center; gap:4px;"><i class="ti ti-database-x"></i> Offline Mode: Using LocalStorage</span>'}
+      <!-- Backup, CSV Export, Restore local database -->
+      <div class="card">
+        <div class="card-title" style="color:#0F6E56;"><i class="ti ti-device-sdcard"></i> Data Backup & Recovery</div>
+        <div style="display:flex; flex-direction:column; gap:10px;">
+          <button class="btn" onclick="window.exportCSV()"><i class="ti ti-file-spreadsheet"></i> Export all data to Excel/CSV</button>
+          <button class="btn" onclick="window.backupJSON()"><i class="ti ti-download"></i> Backup Local Storage (.JSON file)</button>
+          <div style="border-top:0.5px solid var(--color-border-secondary); padding-top:10px; margin-top:4px;">
+            <label class="form-label">Restore from Backup (.json file)</label>
+            <div style="display:flex; gap:8px;">
+              <input type="file" id="s-restore-file" accept=".json" style="padding:4px; font-size:11px;" />
+              <button class="btn btn-sm btn-primary" onclick="window.restoreJSON()">Restore</button>
+            </div>
+          </div>
+          <button class="btn btn-danger" onclick="window.clearLocalData()"><i class="ti ti-trash"></i> Reset All Demo Data</button>
+        </div>
       </div>
-      <div id="dev-creds-container" style="display:none;">
-        <div class="form-row"><label class="form-label">Supabase Project URL</label><input id="s-dbUrl" value="${dbCreds.url}" placeholder="https://xxxx.supabase.co" /></div>
-        <div class="form-row"><label class="form-label">Supabase Anon Key</label><input id="s-dbKey" type="password" value="${dbCreds.key}" placeholder="Supabase Anon Key" /></div>
-      </div>
-    </div>
 
-    <div style="border-top:0.5px solid var(--color-border-tertiary);padding-top:14px;margin-top:14px">
-      <div class="card-title" style="margin-bottom:12px">App Access Password Lock</div>
-      <div style="font-size:12px; color:var(--color-text-secondary); margin-bottom:10px;">
-        Set a password to lock the web app. If set, any visitor must enter this password to view details. Keep empty to disable password lock.
+      <!-- Raw SMS Logs card -->
+      <div class="card">
+        <div class="card-title"><i class="ti ti-list"></i> Raw Credit SMS Logs Viewer</div>
+        <div style="max-height:180px; overflow-y:auto; background:var(--color-background-secondary); padding:8px; border-radius:var(--border-radius-md); border:0.5px solid var(--color-border-primary);">
+          ${rawSmsHtml}
+        </div>
       </div>
-      <div class="form-row"><label class="form-label">New Password</label><input type="password" id="s-app-password" value="${settings.appPassword || ''}" placeholder="Set password" /></div>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:14px;margin-bottom:14px">
-      <button class="btn btn-primary" onclick="window.saveSettings()">${t('save')}</button>
     </div>
   </div>`;
 }
@@ -2244,18 +2451,15 @@ function renderVillageCollection() {
     if (!b.isActive) return false;
     if (selectedVillage && b.village !== selectedVillage) return false;
     
-    // Once collected today, remove from this list
     const hasPaidToday = repayments.some(r => r.borrowerId === b.id && r.paidOn === todayStr);
     if (hasPaidToday) return false;
     
-    // Filter by Collection Day
     if (selectedDay !== 'All') {
       if (b.collectionDay && b.collectionDay !== 'Any Day' && b.collectionDay !== selectedDay) {
         return false;
       }
     }
     
-    // Only show borrowers with active/overdue loans
     return loans.some(l => l.borrowerId === b.id && ['ACTIVE', 'OVERDUE', 'DEFAULTED'].includes(l.status) && calcOutstanding(l) > 0);
   });
 
@@ -2264,24 +2468,68 @@ function renderVillageCollection() {
     return html;
   }
 
-  html += villageBorrowers.map(b => {
-    const bLoans = loans.filter(l => l.borrowerId === b.id && ['ACTIVE', 'OVERDUE', 'DEFAULTED'].includes(l.status));
-    const totalDue = bLoans.reduce((s, l) => s + calcOutstanding(l), 0);
-    const emi = bLoans.reduce((s, l) => s + (l.repaymentAmount || 0), 0);
-    const isOverdue = bLoans.some(l => l.status === 'OVERDUE' || l.status === 'DEFAULTED' || l.dueDate < new Date().toISOString().split('T')[0]);
+  const grouped = {};
+  villageBorrowers.forEach(b => {
+    const v = b.village || 'Other';
+    if (!grouped[v]) grouped[v] = [];
+    grouped[v].push(b);
+  });
+
+  Object.entries(grouped).forEach(([vName, list]) => {
+    html += `
+    <div style="margin-top:14px; margin-bottom:8px; border-bottom:1px solid var(--color-border-secondary); padding-bottom:4px;">
+      <span style="font-size:12px; font-weight:700; color:#185FA5; text-transform:uppercase;"><i class="ti ti-map-pin"></i> ${vName} (${list.length})</span>
+    </div>
+    `;
     
-    return `<div style="display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-radius:var(--border-radius-md); margin-bottom:4px; background:${isOverdue ? '#FFF5F5' : 'var(--color-background-secondary)'}; border:0.5px solid ${isOverdue ? '#F09595' : 'var(--color-border-tertiary)'};">
-      <div>
-        <div style="font-size:13px; font-weight:500;">${b.name} <span style="font-size:10px; color:var(--color-text-tertiary);">${b.village} (${b.collectionDay || 'Any Day'})</span></div>
-        <div style="font-size:11px; color:var(--color-text-secondary);">Repayment: ${fmt(emi)} · Dues Left: ${fmt(totalDue)}</div>
+    html += list.map(b => {
+      const bLoans = loans.filter(l => l.borrowerId === b.id);
+      const activeLoans = bLoans.filter(l => ['ACTIVE', 'OVERDUE', 'DEFAULTED'].includes(l.status));
+      const totalDue = activeLoans.reduce((s, l) => s + calcOutstanding(l), 0);
+      const emi = activeLoans.reduce((s, l) => s + (l.repaymentAmount || 0), 0);
+      const isOverdue = activeLoans.some(l => l.status === 'OVERDUE' || l.status === 'DEFAULTED' || l.dueDate < todayStr);
+      
+      let warnHtml = '';
+      if (!b.photo || !b.document) {
+        warnHtml = `<span style="font-size:9px; color:#A32D2D; background:#FCEBEB; padding:1px 4px; border-radius:3px; font-weight:600; display:inline-flex; align-items:center; gap:2px; vertical-align:middle; margin-left:6px;"><i class="ti ti-alert-triangle"></i> Doc/Photo Missing</span>`;
+      }
+      
+      const allLoansText = `Loans: ${activeLoans.length} active (${bLoans.length} total)`;
+      const missedReasonText = missedReasons[b.id] ? `<div style="font-size:10px; color:#BA7517; margin-top:2px;"><strong>Reason:</strong> "${missedReasons[b.id]}"</div>` : '';
+      
+      const cleanPhone = b.phone ? b.phone.replace(/\D/g, '') : '';
+      const mapQuery = encodeURIComponent(`${b.name} ${b.village} ${b.address || ''}`);
+      
+      return `
+      <div style="padding:10px 12px; border-radius:var(--border-radius-md); margin-bottom:6px; background:${isOverdue ? '#FFF5F5' : 'var(--color-background-secondary)'}; border:0.5px solid ${isOverdue ? '#F09595' : 'var(--color-border-tertiary)'};">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+          <div>
+            <div style="font-size:13px; font-weight:600; display:flex; align-items:center; flex-wrap:wrap; gap:4px;">
+              ${b.name} ${warnHtml}
+            </div>
+            <div style="font-size:11px; color:var(--color-text-secondary); margin-top:2px;">
+              Repayment: <strong>${fmt(emi)}</strong> · Dues Left: <strong>${fmt(totalDue)}</strong>
+            </div>
+            <div style="font-size:10px; color:var(--color-text-tertiary); margin-top:2px;">
+              ${allLoansText} · Day: ${b.collectionDay || 'Any Day'}
+            </div>
+            ${missedReasonText}
+          </div>
+          <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
+            <div style="display:flex; gap:4px;">
+              <a href="tel:${cleanPhone}" class="btn btn-sm" style="padding:4px; width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center; color:#185FA5; background:#fff;" title="Call Borrower"><i class="ti ti-phone" style="font-size:14px;"></i></a>
+              <a href="https://www.google.com/maps/search/?api=1&query=${mapQuery}" target="_blank" class="btn btn-sm" style="padding:4px; width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center; color:#0F6E56; background:#fff;" title="Google Maps Navigation"><i class="ti ti-map-2" style="font-size:14px;"></i></a>
+              <button class="btn btn-sm" onclick="window.openMissedReasonModal(${b.id})" style="padding:4px; width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center; color:#BA7517; background:#fff;" title="Log Missed Payment Reason"><i class="ti ti-notes" style="font-size:14px;"></i></button>
+            </div>
+            <button class="btn btn-sm btn-primary" onclick="window.quickCollect(${b.id})" style="font-size:11px; padding:4px 10px;">
+              <i class="ti ti-cash"></i> Collect
+            </button>
+          </div>
+        </div>
       </div>
-      <div style="display:flex; gap:6px;">
-        <button class="btn btn-sm btn-primary" onclick="window.quickCollect(${b.id})" style="font-size:11px;">
-          <i class="ti ti-cash"></i> Collect
-        </button>
-      </div>
-    </div>`;
-  }).join('');
+      `;
+    }).join('');
+  });
 
   return html;
 }
@@ -2691,6 +2939,874 @@ function unlockApp() {
 window.unlockApp = unlockApp;
 window.showPasswordLockOverlay = showPasswordLockOverlay;
 
+// --- EXTRA OPTIONS EXPOSED ---
+function lockAppNow() {
+  sessionStorage.removeItem('lb_authenticated');
+  showPasswordLockOverlay();
+  showToast('Application locked.');
+}
+
+// --- VOICE COMMAND ASSISTANT (WEB SPEECH API) ---
+function startVoiceSearch() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    showToast('Voice command is not supported in this browser.');
+    return;
+  }
+  
+  const recognition = new SpeechRecognition();
+  recognition.continuous = false;
+  recognition.interimResults = false;
+  recognition.lang = lang === 'te' ? 'te-IN' : lang === 'hi' ? 'hi-IN' : 'en-US';
+  
+  isListeningSpeech = true;
+  updateTopbar();
+  showToast('Listening... Speak a tab name or borrower name.');
+  
+  recognition.onresult = (e) => {
+    const speech = e.results[0][0].transcript.trim().toLowerCase();
+    showToast(`Heard: "${speech}"`);
+    
+    // Command matching
+    const term = speech.toLowerCase();
+    
+    // English commands
+    if (term === 'home' || term === 'dashboard') nav('dashboard');
+    else if (term === 'call list' || term === 'calllist') nav('calllist');
+    else if (term === 'borrowers' || term === 'customers') nav('borrowers');
+    else if (term === 'loans') nav('loans');
+    else if (term === 'repayments' || term === 'collections') nav('repayments');
+    else if (term === 'settings') nav('settings');
+    else if (term === 'borrowings') nav('borrowings');
+    
+    // Telugu commands
+    else if (term.includes('హోమ్') || term.includes('డాష్‌బోర్డ్')) nav('dashboard');
+    else if (term.includes('కాల్ లిస్ట్') || term.includes('కాల్లిస్ట్')) nav('calllist');
+    else if (term.includes('రుణగ్రహీతలు') || term.includes('కస్టమర్లు')) nav('borrowers');
+    else if (term.includes('రుణాలు')) nav('loans');
+    else if (term.includes('చెల్లింపులు')) nav('repayments');
+    else if (term.includes('సెట్టింగ్స్') || term.includes('సెట్టింగ్‌లు')) nav('settings');
+    else if (term.includes('అప్పులు')) nav('borrowings');
+    
+    // Hindi commands
+    else if (term === 'होम' || term.includes('डैशबोर्ड')) nav('dashboard');
+    else if (term.includes('कॉल लिस्ट') || term.includes('कॉललिस्ट')) nav('calllist');
+    else if (term.includes('उधारकर्ता')) nav('borrowers');
+    else if (term.includes('ऋण')) nav('loans');
+    else if (term.includes('भुगतान')) nav('repayments');
+    else if (term.includes('सेटिंग्स')) nav('settings');
+    else if (term.includes('उधार')) nav('borrowings');
+    
+    // Fallback: Treat as search query
+    else {
+      searchQ = speech;
+      const searchInput = document.querySelector('.search-bar');
+      if (searchInput) searchInput.value = speech;
+      showToast(`Searching for: "${speech}"`);
+      if (currentPage === 'dashboard') {
+        nav('borrowers');
+      } else {
+        renderPage(currentPage);
+      }
+    }
+  };
+  
+  recognition.onerror = (e) => {
+    console.error('Voice assistant error:', e);
+    showToast('Could not hear voice. Try again.');
+    isListeningSpeech = false;
+    updateTopbar();
+  };
+  
+  recognition.onend = () => {
+    isListeningSpeech = false;
+    updateTopbar();
+  };
+  
+  recognition.start();
+}
+
+// --- DAILY EXPENSES DIARY ---
+function saveExpense() {
+  const amountInput = document.getElementById('exp-amount');
+  const descInput = document.getElementById('exp-desc');
+  if (!amountInput || !descInput) return;
+  
+  const amount = parseFloat(amountInput.value);
+  const desc = descInput.value.trim();
+  
+  if (!amount || !desc) {
+    showToast('Please enter both amount and description.');
+    return;
+  }
+  
+  const todayStr = new Date().toISOString().split('T')[0];
+  const newExp = {
+    id: dailyExpenses.length ? Math.max(...dailyExpenses.map(e => e.id)) + 1 : 1,
+    amount,
+    desc,
+    date: todayStr
+  };
+  
+  dailyExpenses.push(newExp);
+  localStorage.setItem('lb_daily_expenses', JSON.stringify(dailyExpenses));
+  
+  amountInput.value = '';
+  descInput.value = '';
+  showToast('Expense logged ✓');
+  refreshData().then(() => {
+    renderPage('dashboard');
+  });
+}
+
+function deleteExpense(id) {
+  dailyExpenses = dailyExpenses.filter(e => e.id !== id);
+  localStorage.setItem('lb_daily_expenses', JSON.stringify(dailyExpenses));
+  showToast('Expense removed');
+  refreshData().then(() => {
+    renderPage('dashboard');
+  });
+}
+
+// --- MISSED PAYMENT STATUS COMMENTS ---
+function openMissedReasonModal(borrowerId) {
+  const b = borrowers.find(x => x.id === borrowerId);
+  if (!b) return;
+  
+  const currentReason = missedReasons[borrowerId] || '';
+  
+  document.getElementById('modal-container').innerHTML = `
+  <div class="modal-overlay">
+    <div class="modal" style="width:400px;">
+      <div class="modal-title">Log Missed Payment Reason<button class="btn btn-sm" onclick="window.closeModal()">✕</button></div>
+      <div style="font-size:12px; margin-bottom:12px; color:var(--color-text-secondary);">
+        Log why <strong>${b.name}</strong> missed their collection payment. This will show on the checklist and call list.
+      </div>
+      <div class="form-row">
+        <label class="form-label">Missed Reason / Comment</label>
+        <select id="m-missed-select" onchange="document.getElementById('m-missed-custom').value=this.value" style="margin-bottom:8px;">
+          <option value="">-- Select Common Reason --</option>
+          <option value="Out of town">Out of town / Lock door</option>
+          <option value="Crop loss / Financial crisis">Crop loss / Financial crisis</option>
+          <option value="Will pay on Sunday">Will pay on Sunday</option>
+          <option value="Medical emergency">Medical emergency</option>
+          <option value="Phone switched off">Phone switched off</option>
+        </select>
+        <input type="text" id="m-missed-custom" value="${currentReason}" placeholder="Or type custom reason here..." />
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-primary" onclick="window.saveMissedReason(${borrowerId})">
+          <i class="ti ti-check"></i> Save Reason
+        </button>
+        <button class="btn btn-danger" onclick="window.saveMissedReason(${borrowerId}, true)">Clear</button>
+        <button class="btn" onclick="window.closeModal()">${t('cancel')}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function saveMissedReason(borrowerId, clear = false) {
+  if (clear) {
+    delete missedReasons[borrowerId];
+  } else {
+    const val = document.getElementById('m-missed-custom').value.trim();
+    if (!val) {
+      showToast('Please specify a reason or select clear');
+      return;
+    }
+    missedReasons[borrowerId] = val;
+  }
+  
+  localStorage.setItem('lb_missed_reasons', JSON.stringify(missedReasons));
+  closeModal();
+  showToast(clear ? 'Missed reason cleared' : 'Missed reason saved ✓');
+  refreshData().then(() => {
+    renderPage(currentPage);
+  });
+}
+
+// --- LOAN CALCULATOR LOGIC ---
+function prefillCalculatorToLoan() {
+  const p = parseFloat(document.getElementById('calc-principal').value);
+  const r = parseFloat(document.getElementById('calc-rate').value);
+  const t = parseInt(document.getElementById('calc-tenure').value);
+  const scheme = document.getElementById('calc-scheme').value;
+  
+  if (!p || !r || !t) {
+    showToast('Fill Principal, Rate and Tenure in calculator first.');
+    return;
+  }
+  
+  let emi = 0;
+  if (scheme === 'EMI') {
+    emi = calcEMI(p, r, t);
+  } else if (scheme === 'SIMPLE') {
+    emi = Math.round((p / t) + (p * (r / 100)));
+  } else {
+    // DAILY: Flat rate added, divided by days.
+    const totalFlat = p + (p * (r / 100) * t);
+    emi = Math.round(totalFlat / t);
+  }
+
+  showAddLoan();
+  
+  setTimeout(() => {
+    const principalInput = document.getElementById('m-principal');
+    const repaymentAmountInput = document.getElementById('m-repayment-amount');
+    const tenureInput = document.getElementById('m-tenure');
+    const cycleInput = document.getElementById('m-cycle');
+    const notesInput = document.getElementById('m-notes');
+    
+    if (principalInput) principalInput.value = p;
+    if (repaymentAmountInput) repaymentAmountInput.value = emi;
+    if (tenureInput) tenureInput.value = t;
+    if (cycleInput) {
+      cycleInput.value = 'MONTHLY';
+    }
+    if (notesInput) {
+      notesInput.value = `Interest Scheme: ${scheme} (${r}% per cycle)`;
+    }
+    
+    updateEMIPreview();
+  }, 150);
+}
+
+function runCalculatorLiveCalculation() {
+  const p = parseFloat(document.getElementById('calc-principal')?.value) || 0;
+  const r = parseFloat(document.getElementById('calc-rate')?.value) || 0;
+  const t = parseInt(document.getElementById('calc-tenure')?.value) || 0;
+  const scheme = document.getElementById('calc-scheme')?.value || 'EMI';
+  
+  const emiEl = document.getElementById('calc-out-emi');
+  const intEl = document.getElementById('calc-out-interest');
+  
+  if (p && r && t) {
+    let emi = 0;
+    let totalPayable = 0;
+    if (scheme === 'EMI') {
+      emi = calcEMI(p, r, t);
+      totalPayable = emi * t;
+    } else if (scheme === 'SIMPLE') {
+      emi = Math.round((p / t) + (p * (r / 100)));
+      totalPayable = emi * t;
+    } else {
+      const totalFlat = p + (p * (r / 100) * t);
+      emi = Math.round(totalFlat / t);
+      totalPayable = totalFlat;
+    }
+    const totalInterest = Math.max(0, totalPayable - p);
+    if (emiEl) emiEl.textContent = fmt(emi) + (scheme === 'DAILY' ? ' daily' : ' monthly');
+    if (intEl) intEl.textContent = fmt(totalInterest);
+  }
+}
+
+// --- DATA BACKUP & EXPORTS (CSV / JSON) ---
+function exportCSV() {
+  let csv = 'LenderBook Backup Spreadsheet\nExport Date: ' + new Date().toLocaleDateString() + '\n\n';
+  
+  // 1. Borrowers
+  csv += '--- BORROWERS ---\nID,Name,Phone,Village,Address,UPI VPA,Status,Collection Day\n';
+  borrowers.forEach(b => {
+    csv += `"${b.id}","${b.name.replace(/"/g, '""')}","${b.phone}","${(b.village || '').replace(/"/g, '""')}","${(b.address || '').replace(/"/g, '""')}","${(b.upiVpa || '').replace(/"/g, '""')}","${b.isActive ? 'Active' : 'Inactive'}","${b.collectionDay || 'Any Day'}"\n`;
+  });
+  
+  // 2. Loans
+  csv += '\n--- LOANS ---\nID,Borrower Name,Principal,Rate (%),Tenure (months),Repayment EMI,Start Date,Due Date,Status,Collateral,Notes\n';
+  loans.forEach(l => {
+    csv += `"${l.id}","${borrowerName(l.borrowerId).replace(/"/g, '""')}","${l.principal}","${l.rate}","${l.tenure}","${l.repaymentAmount}","${l.startDate}","${l.dueDate}","${l.status}","${(l.collateral || '').replace(/"/g, '""')}","${(l.notes || '').replace(/"/g, '""')}"\n`;
+  });
+  
+  // 3. Repayments
+  csv += '\n--- REPAYMENTS ---\nID,Borrower Name,Loan ID,Amount,Paid On,Method,Receipt #,Notes\n';
+  repayments.forEach(r => {
+    csv += `"${r.id}","${borrowerName(r.borrowerId).replace(/"/g, '""')}","${r.loanId}","${r.amount}","${r.paidOn}","${r.method}","${r.receipt}","${(r.notes || '').replace(/"/g, '""')}"\n`;
+  });
+  
+  // 4. Borrowings (Taken)
+  csv += '\n--- BORROWINGS (LOANS TAKEN) ---\nID,Lender Name,Principal,Rate (%),Date Taken,Due Date,Status,Repaid So Far,Outstanding,Notes\n';
+  borrowings.forEach(b => {
+    const paid = borrowingRepayments.filter(r => r.borrowingId === b.id).reduce((s, r) => s + r.amount, 0);
+    const outstanding = Math.max(0, b.principal - paid);
+    csv += `"${b.id}","${b.lenderName.replace(/"/g, '""')}","${b.principal}","${b.rate}","${b.startDate}","${b.dueDate}","${b.status}","${paid}","${outstanding}","${(b.notes || '').replace(/"/g, '""')}"\n`;
+  });
+
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.setAttribute("download", `LenderBook_Full_Backup_${new Date().toISOString().split('T')[0]}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  showToast('Excel/CSV spreadsheet backup downloaded!');
+}
+
+function backupJSON() {
+  const backup = {
+    settings,
+    borrowers: JSON.parse(localStorage.getItem('lb_borrowers')) || borrowers,
+    loans: JSON.parse(localStorage.getItem('lb_loans')) || loans,
+    repayments: JSON.parse(localStorage.getItem('lb_repayments')) || repayments,
+    borrowings: JSON.parse(localStorage.getItem('lb_borrowings')) || borrowings,
+    borrowingRepayments: JSON.parse(localStorage.getItem('lb_borrowing_repayments')) || borrowingRepayments,
+    dailyExpenses: JSON.parse(localStorage.getItem('lb_daily_expenses')) || dailyExpenses,
+    missedReasons: JSON.parse(localStorage.getItem('lb_missed_reasons')) || missedReasons,
+    customTemplates: JSON.parse(localStorage.getItem('lb_custom_templates')) || customTemplates
+  };
+  
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.setAttribute("download", `LenderBook_LocalDB_Backup_${new Date().toISOString().split('T')[0]}.json`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  showToast('Local Database JSON backup downloaded!');
+}
+
+function restoreJSON() {
+  const fileInput = document.getElementById('s-restore-file');
+  if (!fileInput || !fileInput.files[0]) {
+    showToast('Please select a .json backup file first.');
+    return;
+  }
+  
+  const file = fileInput.files[0];
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (confirm('Are you sure you want to restore? This will overwrite your current settings, borrowers, loans, repayments, and borrowings.')) {
+        if (data.settings) localStorage.setItem('lenderbook_settings', JSON.stringify(data.settings));
+        if (data.borrowers) localStorage.setItem('lb_borrowers', JSON.stringify(data.borrowers));
+        if (data.loans) localStorage.setItem('lb_loans', JSON.stringify(data.loans));
+        if (data.repayments) localStorage.setItem('lb_repayments', JSON.stringify(data.repayments));
+        if (data.borrowings) localStorage.setItem('lb_borrowings', JSON.stringify(data.borrowings));
+        if (data.borrowingRepayments) localStorage.setItem('lb_borrowing_repayments', JSON.stringify(data.borrowingRepayments));
+        if (data.dailyExpenses) localStorage.setItem('lb_daily_expenses', JSON.stringify(data.dailyExpenses));
+        if (data.missedReasons) localStorage.setItem('lb_missed_reasons', JSON.stringify(data.missedReasons));
+        if (data.customTemplates) localStorage.setItem('lb_custom_templates', JSON.stringify(data.customTemplates));
+        
+        showToast('Database successfully restored! Reloading...');
+        setTimeout(() => {
+          window.location.reload();
+        }, 1200);
+      }
+    } catch (err) {
+      console.error(err);
+      showToast('Error parsing file. Make sure it is a valid LenderBook backup .json file.');
+    }
+  };
+  reader.readAsText(file);
+}
+
+function deleteRawSmsLog(id) {
+  if (confirm('Are you sure you want to delete this SMS log?')) {
+    const rawSmsLocal = JSON.parse(localStorage.getItem('lb_raw_sms')) || [];
+    const updated = rawSmsLocal.filter(s => s.id !== id);
+    localStorage.setItem('lb_raw_sms', JSON.stringify(updated));
+    showToast('SMS log deleted');
+    refreshData().then(() => {
+      renderPage('settings');
+    });
+  }
+}
+
+// --- MANUAL SYNCHRONIZATION ---
+async function triggerOfflineSync() {
+  showToast('Starting manual offline sync...');
+  const res = await syncOfflineData();
+  if (res.success) {
+    showToast(`Sync completed! ${res.count} records synced ✓`);
+    refreshData().then(() => {
+      renderPage(currentPage);
+    });
+  } else {
+    showToast('Sync failed: ' + res.message);
+  }
+}
+
+// --- SHARE PASSBOOK ACCOUNT STATEMENT LEDGER PDF ---
+async function sharePassbookPdf(borrowerId) {
+  const b = borrowers.find(x => x.id === borrowerId);
+  if (!b) return;
+  
+  const bLoans = loans.filter(l => l.borrowerId === borrowerId && ['ACTIVE', 'OVERDUE', 'DEFAULTED'].includes(l.status));
+  if (bLoans.length === 0) {
+    showToast('No active loans to generate passbook.');
+    return;
+  }
+  
+  const loan = bLoans[0]; // main active loan
+  const reps = repayments.filter(r => r.loanId === loan.id).sort((a, b) => new Date(a.paidOn) - new Date(b.paidOn));
+  const stats = getLoanStats(loan);
+  
+  showToast('Generating Passbook Ledger PDF...');
+  
+  const doc = new jsPDF();
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(18);
+  doc.text("LENDERBOOK ACCOUNT STATEMENT", 14, 20);
+  doc.setFontSize(12);
+  doc.text(settings.lenderName || "Ramaiah Finance", 14, 26);
+  
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.text(`Statement Date: ${new Date().toLocaleDateString()}`, 14, 34);
+  
+  doc.line(14, 38, 196, 38);
+  
+  doc.setFont("helvetica", "bold");
+  doc.text("Borrower Details:", 14, 46);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Name: ${b.name}`, 14, 52);
+  doc.text(`Phone: ${b.phone}`, 14, 58);
+  doc.text(`Village: ${b.village || 'N/A'}`, 14, 64);
+  doc.text(`Address: ${b.address || 'N/A'}`, 14, 70);
+  
+  doc.setFont("helvetica", "bold");
+  doc.text("Loan Account Details:", 110, 46);
+  doc.setFont("helvetica", "normal");
+  doc.text(`Principal Amount: ${fmt(loan.principal)}`, 110, 52);
+  doc.text(`Interest Rate: ${loan.rate}% per month`, 110, 58);
+  doc.text(`Tenure Cycle: ${loan.tenure} months`, 110, 64);
+  doc.text(`Start Date: ${loan.startDate}`, 110, 70);
+  
+  doc.line(14, 76, 196, 76);
+  
+  doc.setFont("helvetica", "bold");
+  doc.text("Repayment History Ledger:", 14, 84);
+  
+  // Draw table header
+  let y = 92;
+  doc.setFillColor(241, 245, 249);
+  doc.rect(14, y, 182, 8, "F");
+  doc.setFont("helvetica", "bold");
+  doc.text("Date Paid", 16, y + 6);
+  doc.text("Receipt #", 56, y + 6);
+  doc.text("Method", 96, y + 6);
+  doc.text("Notes", 136, y + 6);
+  doc.text("Amount (₹)", 170, y + 6);
+  
+  doc.setFont("helvetica", "normal");
+  reps.forEach(r => {
+    y += 8;
+    if (y > 270) {
+      doc.addPage();
+      y = 20;
+    }
+    doc.text(r.paidOn, 16, y + 6);
+    doc.text(r.receipt, 56, y + 6);
+    doc.text(r.method, 96, y + 6);
+    doc.text(r.notes || '-', 136, y + 6);
+    doc.text(fmt(r.amount), 170, y + 6);
+  });
+  
+  y += 14;
+  doc.line(14, y, 196, y);
+  
+  y += 8;
+  doc.setFont("helvetica", "bold");
+  doc.text("Total Paid:", 110, y);
+  doc.text(fmt(stats.totalPaid), 170, y);
+  
+  y += 6;
+  doc.text("Remaining Balance Dues:", 110, y);
+  doc.setFillColor(252, 235, 235);
+  doc.rect(168, y - 4, 28, 6, "F");
+  doc.setTextColor(163, 45, 45);
+  doc.text(fmt(stats.amountLeft), 170, y);
+  
+  doc.setTextColor(15, 23, 42); // reset color
+  
+  const pdfBlob = doc.output('blob');
+  const fileName = `Passbook_${b.name.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
+  
+  // If connected, upload and send WhatsApp link
+  if (navigator.onLine && isDbConnected()) {
+    const publicUrl = await uploadReceiptFile(fileName, pdfBlob);
+    if (publicUrl) {
+      const msg = `నమస్కారం ${b.name} గారు,\nమీ లోన్ ఖాతా పాస్‌బుక్ / అకౌంట్ స్టేట్‌మెంట్ పిడిఎఫ్ క్రింది లింక్ ద్వారా డౌన్‌లోడ్ చేసుకోగలరు:\n\n${publicUrl}\n\nధన్యవాదాలు,\n${settings.lenderName}`;
+      const phone = b.phone ? b.phone.replace(/\D/g, '') : '';
+      const cleanPhone = phone.startsWith('91') ? phone : '91' + phone;
+      const url = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(msg)}`;
+      window.open(url, '_blank');
+      showToast('Passbook ledger generated and shared to WhatsApp! ✓');
+    } else {
+      doc.save(fileName);
+      showToast('Failed to upload Passbook to storage. PDF downloaded locally.');
+    }
+  } else {
+    // Offline mode: download PDF directly
+    doc.save(fileName);
+    showToast('Offline Mode: Passbook Statement PDF downloaded locally!');
+  }
+}
+
+// --- BORROWINGS TRACKER (LOANS TAKEN FROM PRIVATE PERSONS) ---
+function renderBorrowings() {
+  const activeB = borrowings.filter(b => b.status === 'ACTIVE');
+  const totalBorrowed = borrowings.reduce((s, b) => s + b.principal, 0);
+  const totalPaid = borrowingRepayments.reduce((s, r) => s + r.amount, 0);
+  const outstandingBorrowed = borrowings.filter(b => b.status === 'ACTIVE').reduce((s, b) => {
+    const paid = borrowingRepayments.filter(r => r.borrowingId === b.id).reduce((sum, r) => sum + r.amount, 0);
+    return s + Math.max(0, b.principal - paid);
+  }, 0);
+  
+  // Calculate Net Own Capital
+  const activeGivenLoans = loans.filter(l => l.status === 'ACTIVE');
+  const totalOutstandingGiven = activeGivenLoans.reduce((s, l) => s + calcOutstanding(l), 0);
+  const netOwnCapital = totalOutstandingGiven - outstandingBorrowed;
+  
+  const filtered = borrowings.filter(b => !searchQ || b.lenderName.toLowerCase().includes(searchQ.toLowerCase()));
+
+  return `
+  <div class="stat-grid">
+    <div class="stat-card">
+      <div class="stat-label">Total Private Borrowings</div>
+      <div class="stat-value" style="color:#A32D2D">${fmt(totalBorrowed)}</div>
+      <div class="stat-sub" style="color:var(--color-text-tertiary)">from ${borrowings.length} lenders</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Repaid So Far</div>
+      <div class="stat-value" style="color:#0F6E56">${fmt(totalPaid)}</div>
+      <div class="stat-sub" style="color:var(--color-text-tertiary)">paid installments</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Outstanding Borrowed Dues</div>
+      <div class="stat-value" style="color:#BA7517">${fmt(outstandingBorrowed)}</div>
+      <div class="stat-sub" style="color:var(--color-text-tertiary)">to repay</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Net Own Business Capital</div>
+      <div class="stat-value" style="color:#185FA5; font-size:18px">${fmt(netOwnCapital)}</div>
+      <div class="stat-sub" style="color:var(--color-text-tertiary)">Outflow (₹${Math.round(totalOutstandingGiven/1000)}k) - Inflow (₹${Math.round(outstandingBorrowed/1000)}k)</div>
+    </div>
+  </div>
+
+  <div class="topbar-section">
+    <input class="search-bar" placeholder="Search Lenders..." value="${searchQ}" oninput="window.searchQ=this.value; window.renderPage('borrowings')" />
+    <button class="btn btn-primary" onclick="window.showAddBorrowing()"><i class="ti ti-plus"></i> Log Loan Taken</button>
+  </div>
+
+  <div class="card" style="padding:0">
+    <table>
+      <thead>
+        <tr>
+          <th>Lender Name</th>
+          <th>Principal (₹)</th>
+          <th>Interest Rate</th>
+          <th>Taken Date</th>
+          <th>Due Date</th>
+          <th>Repaid So Far</th>
+          <th>Outstanding</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${filtered.length === 0 ? '<tr><td colspan="9" class="empty">No borrowings logged yet.</td></tr>' : filtered.map(b => {
+          const paid = borrowingRepayments.filter(r => r.borrowingId === b.id).reduce((s, r) => s + r.amount, 0);
+          const out = Math.max(0, b.principal - paid);
+          return `
+            <tr>
+              <td><strong>${b.lenderName}</strong></td>
+              <td>${fmt(b.principal)}</td>
+              <td>${b.rate}% /month</td>
+              <td>${b.startDate}</td>
+              <td>${b.dueDate}</td>
+              <td style="color:#0F6E56;">${fmt(paid)}</td>
+              <td style="font-weight:600; color:${b.status === 'ACTIVE' ? '#BA7517' : '#5F5E5A'};">${fmt(out)}</td>
+              <td><span class="badge badge-${b.status.toLowerCase()}">${b.status}</span></td>
+              <td style="display:flex; gap:6px;">
+                <button class="btn btn-sm" onclick="window.nav('borrowing-${b.id}')">View</button>
+                ${b.status === 'ACTIVE' ? `<button class="btn btn-sm btn-primary" onclick="window.showLogBorrowingRepayment(${b.id})">Repay</button>` : ''}
+              </td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>
+  </div>
+  `;
+}
+
+function renderBorrowingDetail(id) {
+  const b = borrowings.find(x => x.id === id);
+  if (!b) return '<div class="empty">Borrowing record not found</div>';
+  
+  const reps = borrowingRepayments.filter(r => r.borrowingId === id).sort((a,b) => new Date(b.paidOn) - new Date(a.paidOn));
+  const paid = reps.reduce((s, r) => s + r.amount, 0);
+  const out = Math.max(0, b.principal - paid);
+  
+  return `
+  <div style="margin-bottom:16px;">
+    <button class="btn btn-sm" onclick="window.nav('borrowings')"><i class="ti ti-arrow-left"></i> Back to Borrowings</button>
+  </div>
+  
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">Borrowing Account Details</div>
+      <div class="detail-section">
+        <div class="detail-kv"><span class="detail-key">Lender Name</span><span class="detail-value"><strong>${b.lenderName}</strong></span></div>
+        <div class="detail-kv"><span class="detail-key">Principal Amount</span><span class="detail-value">${fmt(b.principal)}</span></div>
+        <div class="detail-kv"><span class="detail-key">Interest Rate</span><span class="detail-value">${b.rate}% per month</span></div>
+        <div class="detail-kv"><span class="detail-key">Taken Date</span><span class="detail-value">${b.startDate}</span></div>
+        <div class="detail-kv"><span class="detail-key">Due/Repay Date</span><span class="detail-value">${b.dueDate}</span></div>
+        <div class="detail-kv"><span class="detail-key">Status</span><span class="detail-value"><span class="badge badge-${b.status.toLowerCase()}">${b.status}</span></span></div>
+        <div class="detail-kv"><span class="detail-key">Repaid So Far</span><span class="detail-value" style="color:#0F6E56; font-weight:600;">${fmt(paid)}</span></div>
+        <div class="detail-kv"><span class="detail-key">Outstanding Dues Left</span><span class="detail-value" style="color:#BA7517; font-weight:600;">${fmt(out)}</span></div>
+        <div class="detail-kv"><span class="detail-key">Notes</span><span class="detail-value">${b.notes || 'None'}</span></div>
+      </div>
+      
+      ${b.status === 'ACTIVE' ? `
+        <div style="display:flex; gap:8px; margin-top:14px;">
+          <button class="btn btn-primary" onclick="window.showLogBorrowingRepayment(${b.id})"><i class="ti ti-cash"></i> Log Payment to Lender</button>
+          <button class="btn btn-danger" onclick="window.closeBorrowing(${b.id})">Mark as Closed</button>
+        </div>
+      ` : ''}
+    </div>
+
+    <div class="card">
+      <div class="card-title">Repayment Instalment History</div>
+      <div style="max-height:300px; overflow-y:auto;">
+        ${reps.length === 0 ? '<div class="empty">No repayment instalments logged yet.</div>' : reps.map(r => `
+          <div style="padding:10px; border-bottom:0.5px solid var(--color-border-secondary); display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <span style="font-weight:600; color:#0F6E56;">${fmt(r.amount)} Paid</span>
+              <div style="font-size:11px; color:var(--color-text-tertiary); margin-top:2px;">Method: ${r.method} · Date: ${r.paidOn}</div>
+              ${r.notes ? `<div style="font-size:10px; color:var(--color-text-secondary); margin-top:1px;">"${r.notes}"</div>` : ''}
+            </div>
+            <a href="#" onclick="window.deleteBorrowingRepayment(${r.id}, ${b.id})" style="color:#A32D2D; text-decoration:none; font-weight:700;">✕</a>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  </div>
+  `;
+}
+
+function showAddBorrowing() {
+  document.getElementById('modal-container').innerHTML = `
+  <div class="modal-overlay">
+    <div class="modal" style="width:460px;">
+      <div class="modal-title">Log Borrowed Loan (Taken)<button class="btn btn-sm" onclick="window.closeModal()">✕</button></div>
+      <div class="form-row">
+        <label class="form-label">Lender Name (Private Person) *</label>
+        <input type="text" id="m-borrow-lender" placeholder="e.g. Somayya Garu" />
+      </div>
+      <div class="form-grid">
+        <div class="form-row">
+          <label class="form-label">Principal Amount *</label>
+          <input type="number" id="m-borrow-principal" placeholder="50000" />
+        </div>
+        <div class="form-row">
+          <label class="form-label">Interest Rate (% / month) *</label>
+          <input type="number" id="m-borrow-rate" placeholder="2.0" step="0.1" value="2" />
+        </div>
+      </div>
+      <div class="form-grid">
+        <div class="form-row">
+          <label class="form-label">Date Taken *</label>
+          <input type="date" id="m-borrow-start" value="${new Date().toISOString().split('T')[0]}" />
+        </div>
+        <div class="form-row">
+          <label class="form-label">Time to Repay (Due Date) *</label>
+          <input type="date" id="m-borrow-due" value="${new Date(Date.now() + 365*24*60*60*1000).toISOString().split('T')[0]}" />
+        </div>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Notes</label>
+        <textarea id="m-borrow-notes" rows="2" placeholder="Collateral details or repayment timeline..."></textarea>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-primary" onclick="window.saveBorrowing()">
+          <i class="ti ti-check"></i> Save Borrowing Account
+        </button>
+        <button class="btn" onclick="window.closeModal()">${t('cancel')}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function saveBorrowing() {
+  const lender = document.getElementById('m-borrow-lender').value.trim();
+  const principal = parseFloat(document.getElementById('m-borrow-principal').value);
+  const rate = parseFloat(document.getElementById('m-borrow-rate').value);
+  const start = document.getElementById('m-borrow-start').value;
+  const due = document.getElementById('m-borrow-due').value;
+  const notes = document.getElementById('m-borrow-notes').value.trim();
+  
+  if (!lender || !principal || !rate || !start || !due) {
+    showToast('Please fill all required (*) fields.');
+    return;
+  }
+  
+  const newBorrowing = {
+    id: borrowings.length ? Math.max(...borrowings.map(b => b.id)) + 1 : 1,
+    lenderName: lender,
+    principal,
+    rate,
+    startDate: start,
+    dueDate: due,
+    status: 'ACTIVE',
+    notes
+  };
+  
+  borrowings.push(newBorrowing);
+  localStorage.setItem('lb_borrowings', JSON.stringify(borrowings));
+  closeModal();
+  showToast('Borrowing loan logged ✓');
+  refreshData().then(() => {
+    nav('borrowings');
+  });
+}
+
+function showLogBorrowingRepayment(borrowingId) {
+  const b = borrowings.find(x => x.id === borrowingId);
+  if (!b) return;
+  
+  const paid = borrowingRepayments.filter(r => r.borrowingId === borrowingId).reduce((s, r) => s + r.amount, 0);
+  const out = Math.max(0, b.principal - paid);
+
+  document.getElementById('modal-container').innerHTML = `
+  <div class="modal-overlay">
+    <div class="modal" style="width:400px;">
+      <div class="modal-title">Log Repayment to Lender<button class="btn btn-sm" onclick="window.closeModal()">✕</button></div>
+      <div style="background:var(--color-background-secondary); border-radius:var(--border-radius-md); padding:10px; margin-bottom:12px; font-size:12px;">
+        Lender: <strong>${b.lenderName}</strong><br>
+        Outstanding Dues: <strong style="color:#BA7517">${fmt(out)}</strong>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Payment Amount (₹) *</label>
+        <input type="number" id="m-rep-amount" value="${out}" />
+      </div>
+      <div class="form-grid">
+        <div class="form-row">
+          <label class="form-label">Date Paid *</label>
+          <input type="date" id="m-rep-date" value="${new Date().toISOString().split('T')[0]}" />
+        </div>
+        <div class="form-row">
+          <label class="form-label">Method *</label>
+          <select id="m-rep-method">
+            <option value="CASH">Cash</option>
+            <option value="UPI">UPI</option>
+            <option value="BANK">Bank Transfer</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Notes</label>
+        <input type="text" id="m-rep-notes" placeholder="Receipt no or installment notes..." />
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="btn btn-primary" onclick="window.saveBorrowingRepayment(${borrowingId})">
+          <i class="ti ti-check"></i> Log Repayment Instalment
+        </button>
+        <button class="btn" onclick="window.closeModal()">${t('cancel')}</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function saveBorrowingRepayment(borrowingId) {
+  const b = borrowings.find(x => x.id === borrowingId);
+  const amount = parseFloat(document.getElementById('m-rep-amount').value);
+  const date = document.getElementById('m-rep-date').value;
+  const method = document.getElementById('m-rep-method').value;
+  const notes = document.getElementById('m-rep-notes').value.trim();
+  
+  if (!amount || !date || !method) {
+    showToast('Please fill all required (*) fields.');
+    return;
+  }
+  
+  const newRep = {
+    id: borrowingRepayments.length ? Math.max(...borrowingRepayments.map(r => r.id)) + 1 : 1,
+    borrowingId,
+    amount,
+    paidOn: date,
+    method,
+    notes
+  };
+  
+  borrowingRepayments.push(newRep);
+  localStorage.setItem('lb_borrowing_repayments', JSON.stringify(borrowingRepayments));
+  
+  // Check if outstanding is now 0, auto-close
+  const totalPaid = borrowingRepayments.filter(r => r.borrowingId === borrowingId).reduce((s, r) => s + r.amount, 0);
+  if (totalPaid >= b.principal) {
+    const idx = borrowings.findIndex(x => x.id === borrowingId);
+    if (idx !== -1) {
+      borrowings[idx].status = 'CLOSED';
+      localStorage.setItem('lb_borrowings', JSON.stringify(borrowings));
+    }
+  }
+  
+  closeModal();
+  showToast('Repayment instalment logged successfully ✓');
+  refreshData().then(() => {
+    nav(currentPage.startsWith('borrowing-') ? currentPage : 'borrowings');
+  });
+}
+
+function deleteBorrowingRepayment(id, borrowingId) {
+  if (confirm('Delete this repayment instalment?')) {
+    borrowingRepayments = borrowingRepayments.filter(r => r.id !== id);
+    localStorage.setItem('lb_borrowing_repayments', JSON.stringify(borrowingRepayments));
+    
+    // Set status back to ACTIVE if not paid off
+    const b = borrowings.find(x => x.id === borrowingId);
+    const paid = borrowingRepayments.filter(r => r.borrowingId === borrowingId).reduce((s, r) => s + r.amount, 0);
+    if (paid < b.principal && b.status === 'CLOSED') {
+      const idx = borrowings.findIndex(x => x.id === borrowingId);
+      if (idx !== -1) {
+        borrowings[idx].status = 'ACTIVE';
+        localStorage.setItem('lb_borrowings', JSON.stringify(borrowings));
+      }
+    }
+    
+    showToast('Repayment instalment deleted');
+    refreshData().then(() => {
+      renderPage(currentPage);
+    });
+  }
+}
+
+function closeBorrowing(id) {
+  if (confirm('Are you sure you want to mark this borrowing loan as closed?')) {
+    const idx = borrowings.findIndex(x => x.id === id);
+    if (idx !== -1) {
+      borrowings[idx].status = 'CLOSED';
+      localStorage.setItem('lb_borrowings', JSON.stringify(borrowings));
+      showToast('Borrowing loan closed');
+      refreshData().then(() => {
+        nav('borrowings');
+      });
+    }
+  }
+}
+
+// --- GLOBAL ATTACHMENTS ---
+window.lockAppNow = lockAppNow;
+window.startVoiceSearch = startVoiceSearch;
+window.saveExpense = saveExpense;
+window.deleteExpense = deleteExpense;
+window.openMissedReasonModal = openMissedReasonModal;
+window.saveMissedReason = saveMissedReason;
+window.prefillCalculatorToLoan = prefillCalculatorToLoan;
+window.exportCSV = exportCSV;
+window.backupJSON = backupJSON;
+window.restoreJSON = restoreJSON;
+window.deleteRawSmsLog = deleteRawSmsLog;
+window.triggerOfflineSync = triggerOfflineSync;
+window.sharePassbookPdf = sharePassbookPdf;
+window.showAddBorrowing = showAddBorrowing;
+window.saveBorrowing = saveBorrowing;
+window.showLogBorrowingRepayment = showLogBorrowingRepayment;
+window.saveBorrowingRepayment = saveBorrowingRepayment;
+window.deleteBorrowingRepayment = deleteBorrowingRepayment;
+window.closeBorrowing = closeBorrowing;
+
 // --- INITIALIZATION ---
 document.addEventListener('DOMContentLoaded', () => {
   updateLenderNameUI();
@@ -2703,4 +3819,20 @@ document.addEventListener('DOMContentLoaded', () => {
       initRealtimeSms();
     });
   }
+  
+  // Set up listeners for online/offline topbar updates
+  window.addEventListener('online', () => { refreshData().then(updateTopbar); });
+  window.addEventListener('offline', () => { updateTopbar(); });
+  
+  // Bind dynamic inputs for loan calculator on dashboard
+  document.body.addEventListener('input', (e) => {
+    if (['calc-principal', 'calc-rate', 'calc-tenure', 'calc-scheme'].includes(e.target.id)) {
+      runCalculatorLiveCalculation();
+    }
+  });
+  document.body.addEventListener('change', (e) => {
+    if (e.target.id === 'calc-scheme') {
+      runCalculatorLiveCalculation();
+    }
+  });
 });

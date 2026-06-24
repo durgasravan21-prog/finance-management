@@ -507,4 +507,75 @@ export async function uploadReceiptFile(fileName, fileBlob) {
   return null;
 }
 
+export async function syncOfflineData() {
+  if (!supabase) return { success: false, message: 'Database not connected' };
+  
+  let localB = JSON.parse(localStorage.getItem('lb_borrowers')) || [];
+  let localL = JSON.parse(localStorage.getItem('lb_loans')) || [];
+  let localR = JSON.parse(localStorage.getItem('lb_repayments')) || [];
+  
+  if (localB.length === 0 && localL.length === 0 && localR.length === 0) {
+    return { success: true, count: 0 };
+  }
+  
+  let syncCount = 0;
+  try {
+    const idMapB = {};
+    for (const b of localB) {
+      const { id, ...dbBorrower } = mapBorrowerToDb(b);
+      const { data, error } = await supabase.from('borrowers').insert([dbBorrower]).select();
+      if (error) throw error;
+      if (data && data[0]) {
+        idMapB[b.id] = data[0].id;
+        syncCount++;
+      }
+    }
+    
+    const idMapL = {};
+    for (const l of localL) {
+      if (idMapB[l.borrowerId]) {
+        l.borrowerId = idMapB[l.borrowerId];
+      }
+      const { id, ...dbLoan } = mapLoanToDb(l);
+      const { data, error } = await supabase.from('loans').insert([dbLoan]).select();
+      if (error) throw error;
+      if (data && data[0]) {
+        idMapL[l.id] = data[0].id;
+        syncCount++;
+      }
+    }
+    
+    for (const r of localR) {
+      if (idMapL[r.loanId]) r.loanId = idMapL[r.loanId];
+      if (idMapB[r.borrowerId]) r.borrowerId = idMapB[r.borrowerId];
+      
+      const { id, ...dbRepayment } = mapRepaymentToDb(r);
+      const { error } = await supabase.from('repayments').insert([dbRepayment]);
+      if (error) throw error;
+      syncCount++;
+    }
+    
+    localStorage.removeItem('lb_borrowers');
+    localStorage.removeItem('lb_loans');
+    localStorage.removeItem('lb_repayments');
+    
+    localBorrowers.length = 0;
+    localLoans.length = 0;
+    localRepayments.length = 0;
+    
+    return { success: true, count: syncCount };
+  } catch (e) {
+    console.error('Offline sync failed:', e);
+    return { success: false, message: e.message || 'Sync failed' };
+  }
+}
+
+export function getOfflinePendingCount() {
+  const b = JSON.parse(localStorage.getItem('lb_borrowers')) || [];
+  const l = JSON.parse(localStorage.getItem('lb_loans')) || [];
+  const r = JSON.parse(localStorage.getItem('lb_repayments')) || [];
+  return b.length + l.length + r.length;
+}
+
+
 

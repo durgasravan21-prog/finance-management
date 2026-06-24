@@ -773,3 +773,35 @@ textarea:focus {
     white-space: nowrap;
   }
 }
+
+/* Premium styles for new features */
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 4px;
+}
+
+.pulsing {
+  animation: mic-pulsing 1.5s infinite !important;
+  background: #E24B4A !important;
+  color: #fff !important;
+}
+
+@keyframes mic-pulsing {
+  0% {
+    box-shadow: 0 0 0 0 rgba(226, 75, 74, 0.6);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(226, 75, 74, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(226, 75, 74, 0);
+  }
+}
+
+.rotate-hover:hover {
+  transform: rotate(180deg);
+  transition: transform 0.3s ease;
+}
