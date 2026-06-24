@@ -1956,6 +1956,22 @@ function generateReceiptPdf(borrowerName, borrowerPhone, amount, date, method, r
   }
 }
 
+async function copyImageToClipboard(base64DataUrl) {
+  try {
+    const res = await fetch(base64DataUrl);
+    const blob = await res.blob();
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'image/png': blob
+      })
+    ]);
+    return true;
+  } catch (e) {
+    console.error('Failed to copy image to clipboard:', e);
+    return false;
+  }
+}
+
 async function shareRepaymentReceipt(repaymentId) {
   const r = repayments.find(x => x.id === repaymentId);
   if (!r) {
@@ -1970,9 +1986,9 @@ async function shareRepaymentReceipt(repaymentId) {
   const cleanPhone = b.phone.replace(/\D/g, '');
   const finalPhone = cleanPhone.startsWith('91') ? cleanPhone : '91' + cleanPhone;
   
-  showToast('Preparing automated WhatsApp message...', 3000);
+  const shareMsg = `Dear ${b.name}, payment of ${fmt(r.amount)} received on ${r.paidOn} via ${r.method}. Receipt #${r.receipt}. Thank you! - ${settings.lenderName || "LenderBook"}`;
 
-  let pdfLink = '';
+  // 1. Mobile Web Share API - share PDF file directly
   try {
     const stats = getLoanStats(l);
     const pdfBase64 = generateReceiptPdf(
@@ -1986,24 +2002,41 @@ async function shareRepaymentReceipt(repaymentId) {
       stats.amountLeft
     );
 
-    if (pdfBase64) {
+    if (pdfBase64 && pdfBase64.startsWith('data:application/pdf;base64,')) {
       const base64Data = pdfBase64.split(',')[1];
       const pdfBlob = base64toBlob(base64Data, 'application/pdf');
-      const publicUrl = await uploadReceiptFile(`Receipt-${receiptNo}.pdf`, pdfBlob);
-      if (publicUrl) {
-        pdfLink = publicUrl;
+      const file = new File([pdfBlob], `Receipt-${receiptNo}.pdf`, { type: 'application/pdf' });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `Receipt ${receiptNo}`,
+          text: shareMsg
+        });
+        showToast('Receipt PDF shared successfully!');
+        return;
       }
     }
   } catch (err) {
-    console.error('Failed to generate or upload PDF receipt:', err);
+    console.error('Web Share failed, using clipboard fallback:', err);
   }
 
-  // Pre-fill text with the PDF link
-  const shareMsg = `Dear ${b.name}, payment of ${fmt(r.amount)} received on ${r.paidOn} via ${r.method}. Receipt #${r.receipt}.${pdfLink ? ` View PDF Receipt: ${pdfLink}` : ''} Thank you! - ${settings.lenderName || "LenderBook"}`;
+  // 2. Desktop/Clipboard Fallback - copy PNG receipt image to clipboard
+  let copied = false;
+  if (r.receiptImage && r.receiptImage.startsWith('data:image/')) {
+    copied = await copyImageToClipboard(r.receiptImage);
+  }
+
+  const introMsg = `Dear ${b.name}, please find your payment receipt #${receiptNo} of ${fmt(r.amount)} attached below. (Please paste the copied receipt image in chat)`;
+  const whatsappUrl = `https://api.whatsapp.com/send?phone=${finalPhone}&text=${encodeURIComponent(introMsg)}`;
   
-  const whatsappUrl = `https://api.whatsapp.com/send?phone=${finalPhone}&text=${encodeURIComponent(shareMsg)}`;
   window.open(whatsappUrl, '_blank');
-  showToast('WhatsApp opened!');
+
+  if (copied) {
+    showToast('Receipt image copied to clipboard! Press Ctrl+V (Paste) in the WhatsApp window to send it.', 6000);
+  } else {
+    showToast('Opening WhatsApp chat...', 3000);
+  }
 }
 
 function base64toBlob(base64Data, contentType) {
