@@ -649,14 +649,23 @@ function renderBorrowerDetail(id) {
   const bRep = repayments.filter(r => r.borrowerId === id).sort((a, b) => new Date(b.paidOn) - new Date(a.paidOn));
   const totalPaid = bRep.reduce((s, r) => s + r.amount, 0);
   const overdueLoan = getBorrowerOverdueLoan(id);
+  
   return `
   <div style="margin-bottom:14px"><button class="btn btn-sm" onclick="window.nav('borrowers')"><i class="ti ti-arrow-left" aria-hidden="true"></i> Back</button></div>
   <div class="grid2">
     <div class="card">
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-        <div class="avatar" style="width:44px;height:44px;font-size:18px">${b.name.charAt(0)}</div>
+        ${b.photo 
+          ? `<img src="${b.photo}" style="width:48px;height:48px;border-radius:50%;object-fit:cover;border:1px solid var(--color-border-primary);" />` 
+          : `<div class="avatar" style="width:48px;height:48px;font-size:18px">${b.name.charAt(0)}</div>`}
         <div><div style="font-size:15px;font-weight:500">${b.name}</div><div style="font-size:12px;color:var(--color-text-tertiary)">${b.phone}</div></div>
       </div>
+      <div class="detail-kv"><span class="detail-key">Collection Day</span><span style="font-weight:500;color:#185FA5;">${b.collectionDay || 'Any Day'}</span></div>
+      <div class="detail-kv"><span class="detail-key">Signed Doc</span><span>
+        ${b.document 
+          ? `<button class="btn btn-sm btn-primary" onclick="window.viewSignedDoc(${b.id})" style="padding:2px 8px;font-size:11px;"><i class="ti ti-file-text"></i> View Document</button>` 
+          : '<span style="color:var(--color-text-tertiary);">None uploaded</span>'}
+      </span></div>
       <div class="detail-kv"><span class="detail-key">${t('email')}</span><span>${b.email || '-'}</span></div>
       <div class="detail-kv"><span class="detail-key">${t('address')}</span><span>${b.address}</span></div>
       <div class="detail-kv"><span class="detail-key">${t('status')}</span><span class="badge ${b.isActive ? 'badge-active' : 'badge-closed'}">${b.isActive ? 'Active' : 'Inactive'}</span></div>
@@ -678,7 +687,28 @@ function renderBorrowerDetail(id) {
   </div>
   <div class="card">
     <div class="card-title">Repayment history</div>
-    ${bRep.length ? `<table><thead><tr><th>${t('receipt')}</th><th>${t('paid')}</th><th>${t('on')}</th><th>${t('method')}</th><th>Loan</th></tr></thead><tbody>${bRep.map(r => `<tr><td style="font-size:11px;color:var(--color-text-tertiary)">${r.receipt}</td><td style="color:#3B6D11;font-weight:500">${fmt(r.amount)}</td><td>${r.paidOn}</td><td><span class="badge badge-${r.method.toLowerCase()}">${r.method}</span></td><td><button class="btn btn-sm" onclick="window.nav('loan-${r.loanId}')">Loan #${r.loanId}</button></td></tr>`).join('')}</tbody></table>` : '<div class="empty">No repayments yet</div>'}
+    ${bRep.length ? `<table><thead><tr><th>${t('receipt')}</th><th>${t('paid')}</th><th>${t('on')}</th><th>${t('method')}</th><th>Actions</th></tr></thead><tbody>${bRep.map(r => {
+      const shareMsg = `Dear ${b.name}, payment of ${fmt(r.amount)} received on ${r.paidOn} via ${r.method}. Receipt #${r.receipt}. Thank you!`;
+      const cleanPhone = b.phone.replace(/\D/g, '');
+      const finalPhone = cleanPhone.startsWith('91') ? cleanPhone : '91' + cleanPhone;
+      const whatsappUrl = `https://api.whatsapp.com/send?phone=${finalPhone}&text=${encodeURIComponent(shareMsg)}`;
+      
+      return `<tr>
+        <td style="font-size:11px;color:var(--color-text-tertiary)">${r.receipt}</td>
+        <td style="color:#3B6D11;font-weight:500">${fmt(r.amount)}</td>
+        <td>${r.paidOn}</td>
+        <td><span class="badge badge-${r.method.toLowerCase()}">${r.method}</span></td>
+        <td>
+          <div style="display:inline-flex;gap:6px;align-items:center;">
+            <button class="btn btn-sm" onclick="window.nav('loan-${r.loanId}')">Loan #${r.loanId}</button>
+            ${r.receiptImage ? `<button class="btn btn-sm btn-primary" onclick="window.viewRepaymentReceipt(${r.id})" style="padding:2px 8px;font-size:11px;"><i class="ti ti-photo"></i> View Receipt</button>` : ''}
+            <a class="btn btn-sm" href="${whatsappUrl}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:#25D366;color:white;border:none;padding:2px 8px;font-size:11px;font-weight:600;text-decoration:none;border-radius:var(--border-radius-sm);">
+              <i class="ti ti-brand-whatsapp"></i> Share
+            </a>
+          </div>
+        </td>
+      </tr>`;
+    }).join('')}</tbody></table>` : '<div class="empty">No repayments yet</div>'}
   </div>`;
 }
 
@@ -921,6 +951,16 @@ function renderCallList() {
   </div>`;
 }
 
+function handleBadgeClick() {
+  window._badgeClickCount = (window._badgeClickCount || 0) + 1;
+  if (window._badgeClickCount >= 5) {
+    const el = document.getElementById('dev-creds-container');
+    if (el) el.style.display = 'block';
+    showToast('Developer mode: Database credentials unlocked.');
+  }
+}
+window.handleBadgeClick = handleBadgeClick;
+
 function renderSettings() {
   const dbConnected = isDbConnected();
   const dbCreds = getCredentials();
@@ -956,13 +996,15 @@ function renderSettings() {
 
     <div style="border-top:0.5px solid var(--color-border-tertiary); padding-top:14px; margin-top:14px;">
       <div class="card-title" style="margin-bottom:6px;">Database Connection (Supabase)</div>
-      <div style="margin-bottom: 12px; font-size: 12px;">
+      <div style="margin-bottom: 12px; font-size: 12px; cursor: pointer;" onclick="window.handleBadgeClick()">
         ${dbConnected 
           ? '<span class="badge badge-active" style="display:inline-flex; align-items:center; gap:4px;"><i class="ti ti-database-check"></i> Connected & Syncing with Supabase</span>' 
           : '<span class="badge badge-defaulted" style="display:inline-flex; align-items:center; gap:4px;"><i class="ti ti-database-x"></i> Offline Mode: Using LocalStorage</span>'}
       </div>
-      <div class="form-row"><label class="form-label">Supabase Project URL</label><input id="s-dbUrl" value="${dbCreds.url}" placeholder="https://xxxx.supabase.co" /></div>
-      <div class="form-row"><label class="form-label">Supabase Anon Key</label><input id="s-dbKey" type="password" value="${dbCreds.key}" placeholder="Supabase Anon Key" /></div>
+      <div id="dev-creds-container" style="display:none;">
+        <div class="form-row"><label class="form-label">Supabase Project URL</label><input id="s-dbUrl" value="${dbCreds.url}" placeholder="https://xxxx.supabase.co" /></div>
+        <div class="form-row"><label class="form-label">Supabase Anon Key</label><input id="s-dbKey" type="password" value="${dbCreds.key}" placeholder="Supabase Anon Key" /></div>
+      </div>
     </div>
 
     <div style="border-top:0.5px solid var(--color-border-tertiary);padding-top:14px;margin-top:14px">
@@ -975,18 +1017,6 @@ function renderSettings() {
     <div style="display:flex;gap:8px;margin-top:14px;margin-bottom:14px">
       <button class="btn btn-primary" onclick="window.saveSettings()">${t('save')}</button>
     </div>
-    
-    <div style="border-top:0.5px solid var(--color-border-tertiary); padding-top:14px; margin-top:14px;">
-      <div class="card-title" style="margin-bottom:6px; color:#A32D2D;">
-        <i class="ti ti-alert-triangle"></i> Danger Zone
-      </div>
-      <div style="font-size:12px; color:var(--color-text-secondary); margin-bottom:12px; line-height:1.5;">
-        If you want to clear the default demo data (fake names, loans, and repayments) to start fresh with your real data, use the button below. This will delete all LocalStorage records.
-      </div>
-      <button class="btn btn-danger" onclick="window.clearLocalData()" style="width:100%; justify-content:center;">
-        <i class="ti ti-trash"></i> Delete All Local/Demo Data
-      </button>
-    </div>
   </div>`;
 }
 
@@ -994,10 +1024,48 @@ function bindEvents(page) {}
 
 // --- POPUPS & MODALS ---
 
+function resizeAndCompressImage(file, maxDimension = 600) {
+  return new Promise((resolve) => {
+    if (!file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(file);
+      return;
+    }
+    
+    const img = new Image();
+    img.src = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(img.src);
+      let width = img.width;
+      let height = img.height;
+      
+      if (width > maxDimension || height > maxDimension) {
+        if (width > height) {
+          height = Math.round((height * maxDimension) / width);
+          width = maxDimension;
+        } else {
+          width = Math.round((width * maxDimension) / height);
+          height = maxDimension;
+        }
+      }
+      
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', 0.7));
+    };
+    img.onerror = () => resolve('');
+  });
+}
+
 function showAddBorrower() {
   document.getElementById('modal-container').innerHTML = `
   <div class="modal-overlay">
-    <div class="modal">
+    <div class="modal" style="width: 540px; max-width: 95%;">
       <div class="modal-title">${t('addBorrower')}<button class="btn btn-sm" onclick="window.closeModal()">✕</button></div>
       <div class="form-grid">
         <div class="form-row"><label class="form-label">${t('name')} *</label><input id="m-name" placeholder="Full name" /></div>
@@ -1010,6 +1078,26 @@ function showAddBorrower() {
       <div class="form-grid">
         <div class="form-row"><label class="form-label">UPI VPA(s)</label><input id="m-upivpa" placeholder="venkatesh@okaxis, venk@sbi" /></div>
         <div class="form-row"><label class="form-label">${t('email')}</label><input id="m-email" type="email" placeholder="optional" /></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-row">
+          <label class="form-label">Collection Day *</label>
+          <select id="m-collectionDay">
+            <option value="Any Day">Any Day / Daily</option>
+            <option value="Monday">Monday</option>
+            <option value="Tuesday">Tuesday</option>
+            <option value="Wednesday">Wednesday</option>
+            <option value="Thursday">Thursday</option>
+            <option value="Friday">Friday</option>
+            <option value="Saturday">Saturday</option>
+            <option value="Sunday">Sunday</option>
+          </select>
+        </div>
+        <div class="form-row"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-row"><label class="form-label">Borrower Photo</label><input type="file" id="m-photo" accept="image/*" /></div>
+        <div class="form-row"><label class="form-label">Signed Agreement / Doc</label><input type="file" id="m-doc" accept="image/*,application/pdf" /></div>
       </div>
       <div style="background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:8px 10px;font-size:11px;color:var(--color-text-tertiary);margin-bottom:10px">
         <i class="ti ti-info-circle"></i> UPI VPA helps auto-detect payments. Separate multiple VPAs with commas.
@@ -1038,6 +1126,15 @@ async function saveBorrower() {
       }
       return; 
     }
+
+    const photoFile = document.getElementById('m-photo')?.files[0];
+    const docFile = document.getElementById('m-doc')?.files[0];
+
+    let photoBase64 = '';
+    let docBase64 = '';
+
+    if (photoFile) photoBase64 = await resizeAndCompressImage(photoFile);
+    if (docFile) docBase64 = await resizeAndCompressImage(docFile);
     
     await addBorrower({
       name,
@@ -1046,6 +1143,9 @@ async function saveBorrower() {
       address: document.getElementById('m-address').value,
       village: document.getElementById('m-village')?.value?.trim() || '',
       upiVpa: document.getElementById('m-upivpa')?.value?.trim() || '',
+      collectionDay: document.getElementById('m-collectionDay')?.value || 'Any Day',
+      photo: photoBase64,
+      document: docBase64,
       isActive: true
     });
     
@@ -1068,7 +1168,7 @@ function showEditBorrower(id) {
   if (!b) return;
   document.getElementById('modal-container').innerHTML = `
   <div class="modal-overlay">
-    <div class="modal">
+    <div class="modal" style="width: 540px; max-width: 95%;">
       <div class="modal-title">Edit Borrower: ${b.name}<button class="btn btn-sm" onclick="window.closeModal()">✕</button></div>
       <div class="form-grid">
         <div class="form-row"><label class="form-label">${t('name')} *</label><input id="m-name" value="${b.name}" placeholder="Full name" /></div>
@@ -1081,6 +1181,26 @@ function showEditBorrower(id) {
       <div class="form-grid">
         <div class="form-row"><label class="form-label">UPI VPA(s)</label><input id="m-upivpa" value="${b.upiVpa || ''}" placeholder="venkatesh@okaxis, venk@sbi" /></div>
         <div class="form-row"><label class="form-label">${t('email')}</label><input id="m-email" type="email" value="${b.email || ''}" placeholder="optional" /></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-row">
+          <label class="form-label">Collection Day *</label>
+          <select id="m-collectionDay">
+            <option value="Any Day" ${b.collectionDay === 'Any Day' ? 'selected' : ''}>Any Day / Daily</option>
+            <option value="Monday" ${b.collectionDay === 'Monday' ? 'selected' : ''}>Monday</option>
+            <option value="Tuesday" ${b.collectionDay === 'Tuesday' ? 'selected' : ''}>Tuesday</option>
+            <option value="Wednesday" ${b.collectionDay === 'Wednesday' ? 'selected' : ''}>Wednesday</option>
+            <option value="Thursday" ${b.collectionDay === 'Thursday' ? 'selected' : ''}>Thursday</option>
+            <option value="Friday" ${b.collectionDay === 'Friday' ? 'selected' : ''}>Friday</option>
+            <option value="Saturday" ${b.collectionDay === 'Saturday' ? 'selected' : ''}>Saturday</option>
+            <option value="Sunday" ${b.collectionDay === 'Sunday' ? 'selected' : ''}>Sunday</option>
+          </select>
+        </div>
+        <div class="form-row"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-row"><label class="form-label">Borrower Photo</label><input type="file" id="m-photo" accept="image/*" /></div>
+        <div class="form-row"><label class="form-label">Signed Agreement / Doc</label><input type="file" id="m-doc" accept="image/*,application/pdf" /></div>
       </div>
       <div class="form-row">
         <label class="form-label" style="display:flex; align-items:center; gap:6px;">
@@ -1111,16 +1231,29 @@ async function saveEditedBorrower(id) {
       }
       return; 
     }
-    
-    await updateBorrower(id, {
+
+    const photoFile = document.getElementById('m-photo')?.files[0];
+    const docFile = document.getElementById('m-doc')?.files[0];
+
+    const fieldsToUpdate = {
       name,
       phone,
       email: document.getElementById('m-email').value,
       address: document.getElementById('m-address').value,
       village: document.getElementById('m-village')?.value?.trim() || '',
       upiVpa: document.getElementById('m-upivpa')?.value?.trim() || '',
+      collectionDay: document.getElementById('m-collectionDay')?.value || 'Any Day',
       isActive: document.getElementById('m-active').checked
-    });
+    };
+
+    if (photoFile) {
+      fieldsToUpdate.photo = await resizeAndCompressImage(photoFile);
+    }
+    if (docFile) {
+      fieldsToUpdate.document = await resizeAndCompressImage(docFile);
+    }
+    
+    await updateBorrower(id, fieldsToUpdate);
     
     await refreshData();
     closeModal();
@@ -1262,6 +1395,7 @@ function showLogRepayment(loanId, borrowerId) {
         <div class="form-row"><label class="form-label">${t('on')} *</label><input id="m-repon" type="date" value="${new Date().toISOString().split('T')[0]}" /></div>
       </div>
       <div class="form-row"><label class="form-label">${t('method')}</label><select id="m-method"><option value="CASH">Cash</option><option value="UPI">UPI</option><option value="BANK">Bank Transfer</option></select></div>
+      <div class="form-row"><label class="form-label">Upload Receipt Image</label><input type="file" id="m-rep-receipt-img" accept="image/*" /></div>
       <div class="form-row"><label class="form-label">${t('notes')}</label><input id="m-repnotes" placeholder="Optional" /></div>
       <div style="display:flex;gap:8px"><button class="btn btn-primary" onclick="window.saveRepayment()">${t('save')}</button><button class="btn" onclick="window.closeModal()">${t('cancel')}</button></div>
     </div>
@@ -1306,6 +1440,13 @@ async function saveRepayment() {
       }
       return;
     }
+
+    const receiptImgFile = document.getElementById('m-rep-receipt-img')?.files[0];
+    let receiptImgBase64 = '';
+    if (receiptImgFile) {
+      receiptImgBase64 = await resizeAndCompressImage(receiptImgFile);
+    }
+
     const receipt = 'REC-' + String(nextRepaymentId++).padStart(3, '0');
     
     await addRepayment({
@@ -1315,7 +1456,8 @@ async function saveRepayment() {
       paidOn: on,
       method,
       notes: document.getElementById('m-repnotes').value,
-      receipt
+      receipt,
+      receiptImage: receiptImgBase64
     });
     
     await refreshData();
@@ -1332,60 +1474,172 @@ async function saveRepayment() {
   }
 }
 
+function updateReminderPreview(borrowerId) {
+  const b = borrowers.find(x => x.id === borrowerId);
+  if (!b) return;
+  const type = document.getElementById('r-type').value;
+  const previewText = document.getElementById('r-preview-text');
+  const fineRow = document.getElementById('r-fine-row');
+  const manualRow = document.getElementById('r-manual-row');
+  const sendBtn = document.getElementById('r-send-btn');
+  const sendSmsBtn = document.getElementById('r-send-sms-btn');
+  
+  if (type === 'OVERDUE') {
+    fineRow.style.display = 'block';
+    manualRow.style.display = 'none';
+    
+    const fine = +document.getElementById('r-fine').value || 0;
+    const l = getBorrowerOverdueLoan(borrowerId) || loans.find(x => x.borrowerId === borrowerId && ['ACTIVE', 'OVERDUE'].includes(x.status));
+    
+    const baseMsg = l ? generateTeluguOverdueMessage(b, l) : '';
+    let msg = baseMsg;
+    if (fine > 0) {
+      const stats = l ? getLoanStats(l) : { amountLeft: 0 };
+      const total = stats.amountLeft + fine;
+      msg = `నమస్కారం ${b.name} గారు,\n\n${settings.lenderName} నుండి సమాచారం. మీ లోన్ బకాయి చెల్లింపు గడువు తేదీ ${l ? `(${l.dueDate})` : ''} ముగిసినది.\n\nబకాయి ఉన్న మొత్తం: ${fmt(stats.amountLeft)}\nజరిమానా (Fine): ${fmt(fine)}\nమొత్తం బకాయి (Total Due): ${fmt(total)}\n\nదయచేసి మీ బకాయిని వెంటనే చెల్లించగలరు.\n\nధన్యవాదాలు,\n${settings.lenderName}`;
+    }
+    
+    previewText.textContent = msg;
+    
+    sendBtn.onclick = () => window.sendDirectWhatsApp(borrowerId, encodeURIComponent(msg));
+    sendSmsBtn.onclick = () => window.sendDirectSMS(borrowerId, encodeURIComponent(msg));
+  } else if (type === 'TOMORROW') {
+    fineRow.style.display = 'none';
+    manualRow.style.display = 'none';
+    
+    const l = loans.find(x => x.borrowerId === borrowerId && ['ACTIVE', 'OVERDUE'].includes(x.status));
+    const repaymentAmt = l ? l.repaymentAmount : 0;
+    const tomorrowStr = new Date(Date.now() + 86400000).toLocaleDateString('en-CA');
+    
+    const msg = `నమస్తే ${b.name},\nరేపు (${tomorrowStr}) మీ వాయిదా చెల్లింపు రూ. ${fmt(repaymentAmt)} చెల్లించాల్సి ఉంది. దయచేసి UPI లేదా నగదు రూపంలో చెల్లించండి. ధన్యవాదాలు.`;
+    
+    previewText.textContent = msg;
+    
+    sendBtn.onclick = () => window.sendDirectWhatsApp(borrowerId, encodeURIComponent(msg));
+    sendSmsBtn.onclick = () => window.sendDirectSMS(borrowerId, encodeURIComponent(msg));
+  } else {
+    fineRow.style.display = 'none';
+    manualRow.style.display = 'block';
+    previewText.textContent = 'Type your custom message below...';
+    
+    sendBtn.onclick = () => {
+      const customVal = document.getElementById('r-manual-msg').value.trim();
+      if (!customVal) return showToast('Please type a message');
+      window.sendDirectWhatsApp(borrowerId, encodeURIComponent(customVal));
+    };
+    sendSmsBtn.onclick = () => {
+      const customVal = document.getElementById('r-manual-msg').value.trim();
+      if (!customVal) return showToast('Please type a message');
+      window.sendDirectSMS(borrowerId, encodeURIComponent(customVal));
+    };
+  }
+}
+window.updateReminderPreview = updateReminderPreview;
+
 function showSendMessage(borrowerId) {
   const b = borrowers.find(x => x.id === borrowerId);
   if (!b) return;
-  const overdueLoan = getBorrowerOverdueLoan(borrowerId);
+  const overdueLoan = getBorrowerOverdueLoan(borrowerId) || loans.find(x => x.borrowerId === borrowerId && ['ACTIVE', 'OVERDUE'].includes(x.status));
   
-  let teluguMsg = '';
-  let showTeluguSection = false;
-  
-  if (overdueLoan) {
-    teluguMsg = generateTeluguOverdueMessage(b, overdueLoan);
-    showTeluguSection = true;
-  }
-  
+  const initialType = overdueLoan ? 'OVERDUE' : 'TOMORROW';
+  const initialMsg = overdueLoan 
+    ? generateTeluguOverdueMessage(b, overdueLoan) 
+    : (() => {
+        const l = loans.find(x => x.borrowerId === borrowerId && ['ACTIVE', 'OVERDUE'].includes(x.status));
+        const repaymentAmt = l ? l.repaymentAmount : 0;
+        const tomorrowStr = new Date(Date.now() + 86400000).toLocaleDateString('en-CA');
+        return `నమస్తే ${b.name},\nరేపు (${tomorrowStr}) మీ వాయిదా చెల్లింపు రూ. ${fmt(repaymentAmt)} చెల్లించాల్సి ఉంది. దయచేసి UPI లేదా నగదు రూపంలో చెల్లించండి. ధన్యవాదాలు.`;
+      })();
+
   document.getElementById('modal-container').innerHTML = `
   <div class="modal-overlay">
     <div class="modal" style="width: 520px; max-width: 95%;">
       <div class="modal-title">Send Reminder to ${b.name}<button class="btn btn-sm" onclick="window.closeModal()">✕</button></div>
       
-      ${showTeluguSection ? `
-      <div style="background: #FCEBEB; border: 0.5px solid #F09595; border-radius: var(--border-radius-md); padding: 12px; margin-bottom: 14px;">
-        <div style="font-weight: 600; color: #A32D2D; font-size: 12px; margin-bottom: 6px; display: flex; align-items: center; gap: 4px;">
-          <i class="ti ti-alert-triangle"></i> OVERDUE REMINDER (Telugu - Auto Generated)
-        </div>
-        <div style="font-size: 12.5px; color: var(--color-text-primary); margin-bottom: 10px; white-space: pre-line; line-height: 1.4; border-left: 3px solid #E24B4A; padding-left: 8px;">
-          ${teluguMsg}
-        </div>
-        <div style="display: flex; gap: 8px;">
-          <button class="btn btn-sm btn-danger" onclick="window.sendDirectWhatsApp(${borrowerId}, \`${encodeURIComponent(teluguMsg)}\`)">
-            <i class="ti ti-brand-whatsapp"></i> Send via WhatsApp
-          </button>
-          <button class="btn btn-sm" onclick="window.sendDirectSMS(${borrowerId}, \`${encodeURIComponent(teluguMsg)}\`)">
-            <i class="ti ti-message"></i> Send via SMS
-          </button>
-        </div>
-      </div>
-      ` : ''}
-      
       <div class="form-row">
-        <label class="form-label" style="font-weight: 600;">Manual Custom Message (Send by Father)</label>
-        <textarea id="m-manual-msg" rows="4" placeholder="Type a custom message here..."></textarea>
+        <label class="form-label" style="font-weight: 600;">Reminder Type</label>
+        <select id="r-type" onchange="window.updateReminderPreview(${borrowerId})">
+          <option value="OVERDUE" ${initialType === 'OVERDUE' ? 'selected' : ''}>Overdue Reminder (Telugu)</option>
+          <option value="TOMORROW" ${initialType === 'TOMORROW' ? 'selected' : ''}>Tomorrow's Due Reminder (Telugu)</option>
+          <option value="CUSTOM">Custom Message (Manual)</option>
+        </select>
+      </div>
+
+      <div class="form-row" id="r-fine-row" style="display: ${initialType === 'OVERDUE' ? 'block' : 'none'};">
+        <label class="form-label">Fine Amount (₹) - Optional</label>
+        <input type="number" id="r-fine" placeholder="Enter fine amount if any" oninput="window.updateReminderPreview(${borrowerId})" />
+      </div>
+
+      <div class="form-row" id="r-manual-row" style="display: none;">
+        <label class="form-label">Manual Custom Message</label>
+        <textarea id="r-manual-msg" rows="4" placeholder="Type custom message here..."></textarea>
+      </div>
+
+      <div style="background: var(--color-background-secondary); border: 0.5px solid var(--color-border-primary); border-radius: var(--border-radius-md); padding: 12px; margin-bottom: 14px;">
+        <div style="font-weight: 600; color: #185FA5; font-size: 11px; margin-bottom: 6px; display: flex; align-items: center; gap: 4px;">
+          <i class="ti ti-brand-whatsapp"></i> MESSAGE PREVIEW
+        </div>
+        <div id="r-preview-text" style="font-size: 13px; color: var(--color-text-primary); white-space: pre-line; line-height: 1.4; border-left: 3px solid #185FA5; padding-left: 8px;">
+          ${initialMsg}
+        </div>
       </div>
       
       <div style="display:flex; gap:8px;">
-        <button class="btn btn-primary" onclick="window.sendManualMessage(${borrowerId}, 'whatsapp')">
-          <i class="ti ti-brand-whatsapp"></i> Send WhatsApp
+        <button class="btn btn-primary" id="r-send-btn">
+          <i class="ti ti-brand-whatsapp"></i> Send via WhatsApp
         </button>
-        <button class="btn" onclick="window.sendManualMessage(${borrowerId}, 'sms')">
-          <i class="ti ti-message"></i> Send SMS
+        <button class="btn" id="r-send-sms-btn">
+          <i class="ti ti-message"></i> Send via SMS
         </button>
         <button class="btn" onclick="window.closeModal()">${t('cancel')}</button>
       </div>
     </div>
   </div>`;
+
+  // Initialize event handlers
+  updateReminderPreview(borrowerId);
 }
+
+function viewSignedDoc(borrowerId) {
+  const b = borrowers.find(x => x.id === borrowerId);
+  if (!b || !b.document) return;
+  
+  document.getElementById('modal-container').innerHTML = `
+  <div class="modal-overlay" onclick="window.closeModal()">
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:80%; max-height:85vh; display:flex; flex-direction:column;">
+      <div class="modal-title">Signed Document — ${b.name}<button class="btn btn-sm" onclick="window.closeModal()">✕</button></div>
+      <div style="flex:1; overflow:auto; text-align:center; padding:10px;">
+        ${b.document.startsWith('data:image/') 
+          ? `<img src="${b.document}" style="max-width:100%; max-height:70vh; border-radius:var(--border-radius-md);" />` 
+          : b.document.startsWith('data:application/pdf')
+            ? `<iframe src="${b.document}" style="width:100%; height:70vh; border:none;"></iframe>`
+            : `<a href="${b.document}" download="document" class="btn btn-primary">Download Document</a>`}
+      </div>
+    </div>
+  </div>`;
+}
+window.viewSignedDoc = viewSignedDoc;
+
+function viewRepaymentReceipt(repaymentId) {
+  const r = repayments.find(x => x.id === repaymentId);
+  if (!r || !r.receiptImage) return;
+  const b = borrowers.find(x => x.id === r.borrowerId);
+  
+  document.getElementById('modal-container').innerHTML = `
+  <div class="modal-overlay" onclick="window.closeModal()">
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:80%; max-height:85vh; display:flex; flex-direction:column;">
+      <div class="modal-title">Repayment Receipt — ${b ? b.name : 'Borrower'}<button class="btn btn-sm" onclick="window.closeModal()">✕</button></div>
+      <div style="flex:1; overflow:auto; text-align:center; padding:10px;">
+        ${r.receiptImage.startsWith('data:image/') 
+          ? `<img src="${r.receiptImage}" style="max-width:100%; max-height:70vh; border-radius:var(--border-radius-md);" />` 
+          : r.receiptImage.startsWith('data:application/pdf')
+            ? `<iframe src="${r.receiptImage}" style="width:100%; height:70vh; border:none;"></iframe>`
+            : `<a href="${r.receiptImage}" download="receipt" class="btn btn-primary">Download Receipt</a>`}
+      </div>
+    </div>
+  </div>`;
+}
+window.viewRepaymentReceipt = viewRepaymentReceipt;
 
 async function closeLoan(id) {
   await updateLoanStatus(id, 'CLOSED');
@@ -1401,9 +1655,13 @@ function saveSettings() {
   settings.upiAutoDetect = document.getElementById('s-upiAutoDetect')?.value === 'true';
   settings.appPassword = (document.getElementById('s-app-password')?.value || '').trim();
   
-  const dbUrl = document.getElementById('s-dbUrl').value.trim();
-  const dbKey = document.getElementById('s-dbKey').value.trim();
-  setCredentials(dbUrl, dbKey);
+  const dbUrlInput = document.getElementById('s-dbUrl');
+  const dbKeyInput = document.getElementById('s-dbKey');
+  if (dbUrlInput && dbKeyInput) {
+    const dbUrl = dbUrlInput.value.trim();
+    const dbKey = dbKeyInput.value.trim();
+    setCredentials(dbUrl, dbKey);
+  }
 
   const newLang = document.getElementById('s-lang').value;
   if (newLang !== lang) {
@@ -1540,9 +1798,20 @@ function renderVillageCollection() {
 
   const selectedVillage = window._selectedVillage || '';
   
-  let html = `<div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px;">
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const todayDay = days[new Date().getDay()];
+  const selectedDay = window._selectedCollectionDay || todayDay;
+  const daysList = ['All', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+  let html = `
+  <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; align-items:center;">
+    <span style="font-size:11px; font-weight:600; color:var(--color-text-secondary); width:50px;">Village:</span>
     <button class="btn btn-sm ${!selectedVillage ? 'btn-primary' : ''}" onclick="window.selectVillage('')">All</button>
     ${villages.map(v => `<button class="btn btn-sm ${selectedVillage === v ? 'btn-primary' : ''}" onclick="window.selectVillage('${v}')">${v}</button>`).join('')}
+  </div>
+  <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; border-top:0.5px solid var(--color-border-tertiary); padding-top:8px; align-items:center;">
+    <span style="font-size:11px; font-weight:600; color:var(--color-text-secondary); width:50px;">Day:</span>
+    ${daysList.map(d => `<button class="btn btn-sm ${selectedDay === d ? 'btn-primary' : ''}" onclick="window.selectCollectionDay('${d}')">${d}</button>`).join('')}
   </div>`;
 
   const todayStr = new Date().toISOString().split('T')[0];
@@ -1554,12 +1823,19 @@ function renderVillageCollection() {
     const hasPaidToday = repayments.some(r => r.borrowerId === b.id && r.paidOn === todayStr);
     if (hasPaidToday) return false;
     
+    // Filter by Collection Day
+    if (selectedDay !== 'All') {
+      if (b.collectionDay && b.collectionDay !== 'Any Day' && b.collectionDay !== selectedDay) {
+        return false;
+      }
+    }
+    
     // Only show borrowers with active/overdue loans
     return loans.some(l => l.borrowerId === b.id && ['ACTIVE', 'OVERDUE', 'DEFAULTED'].includes(l.status) && calcOutstanding(l) > 0);
   });
 
   if (villageBorrowers.length === 0) {
-    html += `<div style="text-align:center; padding:12px; color:var(--color-text-tertiary); font-size:12px;">No dues pending${selectedVillage ? ' in ' + selectedVillage : ''}.</div>`;
+    html += `<div style="text-align:center; padding:12px; color:var(--color-text-tertiary); font-size:12px;">No dues pending${selectedVillage ? ' in ' + selectedVillage : ''}${selectedDay !== 'All' ? ' for ' + selectedDay : ''}.</div>`;
     return html;
   }
 
@@ -1571,7 +1847,7 @@ function renderVillageCollection() {
     
     return `<div style="display:flex; justify-content:space-between; align-items:center; padding:8px 10px; border-radius:var(--border-radius-md); margin-bottom:4px; background:${isOverdue ? '#FFF5F5' : 'var(--color-background-secondary)'}; border:0.5px solid ${isOverdue ? '#F09595' : 'var(--color-border-tertiary)'};">
       <div>
-        <div style="font-size:13px; font-weight:500;">${b.name} <span style="font-size:10px; color:var(--color-text-tertiary);">${b.village}</span></div>
+        <div style="font-size:13px; font-weight:500;">${b.name} <span style="font-size:10px; color:var(--color-text-tertiary);">${b.village} (${b.collectionDay || 'Any Day'})</span></div>
         <div style="font-size:11px; color:var(--color-text-secondary);">Repayment: ${fmt(emi)} · Dues Left: ${fmt(totalDue)}</div>
       </div>
       <div style="display:flex; gap:6px;">
@@ -1825,6 +2101,12 @@ function selectVillage(village) {
   renderPage('dashboard');
 }
 
+function selectCollectionDay(day) {
+  window._selectedCollectionDay = day;
+  renderPage('dashboard');
+}
+window.selectCollectionDay = selectCollectionDay;
+
 function quickCollect(borrowerId) {
   const activeLoan = loans.find(l => l.borrowerId === borrowerId && ['ACTIVE', 'OVERDUE', 'DEFAULTED'].includes(l.status));
   if (activeLoan) {
@@ -1898,6 +2180,9 @@ window.doAssignUpiPayment = doAssignUpiPayment;
 window.assignAndConfirmUpiPayment = assignAndConfirmUpiPayment;
 window.updateRepaymentPrefill = updateRepaymentPrefill;
 window.sendAllWhatsAppReminders = sendAllWhatsAppReminders;
+window.viewSignedDoc = viewSignedDoc;
+window.viewRepaymentReceipt = viewRepaymentReceipt;
+window.updateReminderPreview = updateReminderPreview;
 
 function showPasswordLockOverlay() {
   document.getElementById('app').style.filter = 'blur(10px)';

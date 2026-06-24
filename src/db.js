@@ -44,7 +44,10 @@ function mapBorrowerFromDb(b) {
     address: b.address || '',
     village: b.village || '',
     upiVpa: b.upi_vpa || '',
-    isActive: b.is_active
+    isActive: b.is_active,
+    photo: b.photo || '',
+    document: b.document || '',
+    collectionDay: b.collection_day || 'Any Day'
   };
 }
 
@@ -56,7 +59,10 @@ function mapBorrowerToDb(b) {
     address: b.address || '',
     village: b.village || '',
     upi_vpa: b.upiVpa || '',
-    is_active: b.isActive
+    is_active: b.isActive,
+    photo: b.photo || '',
+    document: b.document || '',
+    collection_day: b.collectionDay || 'Any Day'
   };
 }
 
@@ -142,7 +148,8 @@ function mapRepaymentFromDb(r) {
     paidOn: r.paid_on,
     method: r.method,
     notes: r.notes || '',
-    receipt: r.receipt
+    receipt: r.receipt,
+    receiptImage: r.receipt_image || ''
   };
 }
 
@@ -154,7 +161,8 @@ function mapRepaymentToDb(r) {
     paid_on: r.paidOn,
     method: r.method,
     notes: r.notes || '',
-    receipt: r.receipt
+    receipt: r.receipt,
+    receipt_image: r.receiptImage || ''
   };
 }
 
@@ -389,6 +397,9 @@ export async function updateBorrower(id, fields) {
     if (fields.village !== undefined) dbFields.village = fields.village;
     if (fields.upiVpa !== undefined) dbFields.upi_vpa = fields.upiVpa;
     if (fields.isActive !== undefined) dbFields.is_active = fields.isActive;
+    if (fields.photo !== undefined) dbFields.photo = fields.photo;
+    if (fields.document !== undefined) dbFields.document = fields.document;
+    if (fields.collectionDay !== undefined) dbFields.collection_day = fields.collectionDay;
     const { data, error } = await supabase.from('borrowers').update(dbFields).eq('id', id).select();
     if (error) {
       console.error('Supabase update borrower error:', error);

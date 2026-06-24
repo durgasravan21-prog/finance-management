@@ -8,9 +8,27 @@
   <meta name="description" content="LenderBook — a premium and full-featured lender management dashboard for tracking borrowers, loans, repayments, and overdues.">
   <meta name="author" content="Antigravity Coding Assistant">
   
+  <!-- PWA Meta Tags -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="LenderBook">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#1C1844">
+  <link rel="manifest" href="/manifest.json">
+
   <!-- Tabler Icons & Stylesheet -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css">
   <link rel="stylesheet" href="/src/style.css">
+  
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(err => {
+          console.error('Service worker registration failed:', err);
+        });
+      });
+    }
+  </script>
 </head>
 <body>
   <div id="app" style="position:relative; min-height:100vh;">
