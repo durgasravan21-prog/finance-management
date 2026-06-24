@@ -197,6 +197,7 @@ let localRepayments = JSON.parse(localStorage.getItem('lb_repayments')) || [];
 let localMsgs = JSON.parse(localStorage.getItem('lb_msgs')) || [];
 
 let localUpiPayments = JSON.parse(localStorage.getItem('lb_upi_payments')) || [];
+let localRawSms = JSON.parse(localStorage.getItem('lb_raw_sms')) || [];
 
 // --- DB INTERFACE METHODS ---
 
@@ -415,3 +416,70 @@ export async function updateBorrower(id, fields) {
   }
   return null;
 }
+
+// --- RAW INCOMING SMS ---
+export async function getUnprocessedSms() {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from('raw_incoming_sms').select('*').eq('processed', false);
+      if (!error) return data;
+      console.error('Supabase fetch unprocessed sms error:', error);
+    } catch (e) {
+      console.error('Supabase error:', e);
+    }
+  }
+  return localRawSms.filter(x => !x.processed);
+}
+
+export async function markSmsProcessed(id) {
+  if (supabase) {
+    try {
+      const { error } = await supabase.from('raw_incoming_sms').update({ processed: true }).eq('id', id);
+      if (error) console.error('Supabase mark sms processed error:', error);
+    } catch (e) {
+      console.error('Supabase error:', e);
+    }
+  }
+  const idx = localRawSms.findIndex(x => x.id === id);
+  if (idx !== -1) {
+    localRawSms[idx].processed = true;
+    saveLocal('raw_sms', localRawSms);
+  }
+}
+
+export async function addRawSms(sms) {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from('raw_incoming_sms').insert([{ sms_text: sms.smsText || sms.sms_text, sender: sms.sender || 'Unknown', processed: false }]).select();
+      if (!error && data && data.length > 0) return data[0];
+      console.error('Supabase add raw sms error:', error);
+    } catch (e) {
+      console.error('Supabase error:', e);
+    }
+  }
+  const newSms = { id: localRawSms.length ? Math.max(...localRawSms.map(x => x.id)) + 1 : 1, sms_text: sms.smsText || sms.sms_text, sender: sms.sender || 'Unknown', received_at: new Date().toISOString(), processed: false };
+  localRawSms.push(newSms);
+  saveLocal('raw_sms', localRawSms);
+  return newSms;
+}
+
+export function subscribeToRealtimeSms(callback) {
+  if (supabase) {
+    return supabase
+      .channel('raw_incoming_sms_changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'raw_incoming_sms'
+        },
+        (payload) => {
+          callback(payload.new);
+        }
+      )
+      .subscribe();
+  }
+  return null;
+}
+

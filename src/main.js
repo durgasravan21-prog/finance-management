@@ -14,9 +14,15 @@ import {
   updateUpiPaymentStatus,
   isDbConnected,
   getCredentials,
-  setCredentials
+  setCredentials,
+  getUnprocessedSms,
+  markSmsProcessed,
+  addRawSms,
+  subscribeToRealtimeSms
 } from './db.js';
 import { parseBankSMS, matchVPAToBorrower, SAMPLE_SMS } from './sms-parser.js';
+import { jsPDF } from 'jspdf';
+
 
 // --- TRANSLATIONS ---
 const T = {
@@ -289,13 +295,63 @@ function t(k) {
   return T[lang][k] || T.en[k] || k;
 }
 
+// --- SMS PROCESSING HELPERS ---
+async function processIncomingSmsRow(row) {
+  const result = parseBankSMS(row.sms_text);
+  if (result.parsed && result.amount) {
+    // Try to match VPA to a borrower
+    let matchedBorrowerId = null;
+    if (result.senderVPA) {
+      const matched = matchVPAToBorrower(result.senderVPA, borrowers.map(b => ({ ...b, vpa: b.upiVpa })));
+      if (matched) matchedBorrowerId = matched.id;
+    }
+
+    // Add to UPI auto payments
+    await addUpiPayment({
+      borrowerId: matchedBorrowerId,
+      amount: result.amount,
+      upiVpa: result.senderVPA || 'unknown',
+      bankSmsText: row.sms_text,
+      status: 'PENDING'
+    });
+    
+    const bName = matchedBorrowerId ? borrowers.find(b => b.id === matchedBorrowerId)?.name : null;
+    if (bName) {
+      showToast(`Auto-detected SMS payment: ${fmt(result.amount)} from ${bName} ✓`);
+    } else {
+      showToast(`Auto-detected SMS payment: ${fmt(result.amount)} (Unknown sender)`);
+    }
+  }
+  // Always mark as processed so we don't scan it again
+  await markSmsProcessed(row.id);
+}
+
+async function processUnprocessedSms() {
+  try {
+    const rawList = await getUnprocessedSms();
+    if (rawList && rawList.length > 0) {
+      for (const sms of rawList) {
+        await processIncomingSmsRow(sms);
+      }
+    }
+  } catch (e) {
+    console.error('Error processing raw SMS:', e);
+  }
+}
+
+
 // --- DB SYNC HELPERS ---
 async function refreshData() {
   borrowers = await getBorrowers();
+  
+  // Auto-detect and parse any unprocessed incoming SMS
+  await processUnprocessedSms();
+
   loans = await getLoans();
   repayments = await getRepayments();
   msgs = await getMessages();
   upiPayments = await getUpiPayments();
+
 
   // When Supabase is connected, clear stale localStorage caches
   // so phantom duplicates from old offline sessions never resurface
@@ -702,9 +758,9 @@ function renderBorrowerDetail(id) {
           <div style="display:inline-flex;gap:6px;align-items:center;">
             <button class="btn btn-sm" onclick="window.nav('loan-${r.loanId}')">Loan #${r.loanId}</button>
             ${r.receiptImage ? `<button class="btn btn-sm btn-primary" onclick="window.viewRepaymentReceipt(${r.id})" style="padding:2px 8px;font-size:11px;"><i class="ti ti-photo"></i> View Receipt</button>` : ''}
-            <a class="btn btn-sm" href="${whatsappUrl}" target="_blank" style="display:inline-flex;align-items:center;gap:4px;background:#25D366;color:white;border:none;padding:2px 8px;font-size:11px;font-weight:600;text-decoration:none;border-radius:var(--border-radius-sm);">
+            <button class="btn btn-sm" onclick="window.shareRepaymentReceipt(${r.id})" style="display:inline-flex;align-items:center;gap:4px;background:#25D366;color:white;border:none;padding:2px 8px;font-size:11px;font-weight:600;border-radius:var(--border-radius-sm);">
               <i class="ti ti-brand-whatsapp"></i> Share
-            </a>
+            </button>
           </div>
         </td>
       </tr>`;
@@ -849,6 +905,7 @@ function renderRepayments() {
                 <th>${t('on')}</th>
                 <th>${t('method')}</th>
                 <th>${t('notes')}</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -859,6 +916,14 @@ function renderRepayments() {
                   <td>${r.paidOn}</td>
                   <td><span class="badge badge-${r.method.toLowerCase()}">${r.method}</span></td>
                   <td style="color:var(--color-text-tertiary);">${r.notes || '-'}</td>
+                  <td>
+                    <div style="display:inline-flex; gap:6px; align-items:center;">
+                      ${r.receiptImage ? `<button class="btn btn-sm btn-primary" onclick="window.viewRepaymentReceipt(${r.id})" style="padding:2px 8px; font-size:11px;"><i class="ti ti-photo"></i> View Receipt</button>` : ''}
+                      <button class="btn btn-sm" onclick="window.shareRepaymentReceipt(${r.id})" style="display:inline-flex; align-items:center; gap:4px; background:#25D366; color:white; border:none; padding:2px 8px; font-size:11px; font-weight:600; border-radius:var(--border-radius-sm);">
+                        <i class="ti ti-brand-whatsapp"></i> Share
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               `).join('')}
             </tbody>
@@ -1395,7 +1460,6 @@ function showLogRepayment(loanId, borrowerId) {
         <div class="form-row"><label class="form-label">${t('on')} *</label><input id="m-repon" type="date" value="${new Date().toISOString().split('T')[0]}" /></div>
       </div>
       <div class="form-row"><label class="form-label">${t('method')}</label><select id="m-method"><option value="CASH">Cash</option><option value="UPI">UPI</option><option value="BANK">Bank Transfer</option></select></div>
-      <div class="form-row"><label class="form-label">Upload Receipt Image</label><input type="file" id="m-rep-receipt-img" accept="image/*" /></div>
       <div class="form-row"><label class="form-label">${t('notes')}</label><input id="m-repnotes" placeholder="Optional" /></div>
       <div style="display:flex;gap:8px"><button class="btn btn-primary" onclick="window.saveRepayment()">${t('save')}</button><button class="btn" onclick="window.closeModal()">${t('cancel')}</button></div>
     </div>
@@ -1423,6 +1487,8 @@ async function saveRepayment() {
     const amt = +document.getElementById('m-repamt').value;
     const on = document.getElementById('m-repon').value;
     const method = document.getElementById('m-method').value;
+    const notesVal = document.getElementById('m-repnotes').value;
+
     if (!loanId || !amt || !on) { 
       showToast('Please fill required fields'); 
       if (saveBtn) {
@@ -1441,21 +1507,35 @@ async function saveRepayment() {
       return;
     }
 
-    const receiptImgFile = document.getElementById('m-rep-receipt-img')?.files[0];
-    let receiptImgBase64 = '';
-    if (receiptImgFile) {
-      receiptImgBase64 = await resizeAndCompressImage(receiptImgFile);
-    }
+    const borrower = borrowers.find(b => b.id === loan.borrowerId);
+    const borrowerNameStr = borrower ? borrower.name : 'Borrower';
+    const borrowerPhoneStr = borrower ? borrower.phone : '';
+
+    // Calculate outstanding balance after this repayment
+    const statsBefore = getLoanStats(loan);
+    const balanceAfter = Math.max(0, statsBefore.amountLeft - amt);
 
     const receipt = 'REC-' + String(nextRepaymentId++).padStart(3, '0');
     
-    await addRepayment({
+    // Auto-generate receipt PDF
+    const receiptImgBase64 = generateReceiptPdf(
+      borrowerNameStr,
+      borrowerPhoneStr,
+      amt,
+      on,
+      method,
+      receipt,
+      notesVal,
+      balanceAfter
+    );
+
+    const nextRep = await addRepayment({
       loanId,
       borrowerId: loan.borrowerId,
       amount: amt,
       paidOn: on,
       method,
-      notes: document.getElementById('m-repnotes').value,
+      notes: notesVal,
       receipt,
       receiptImage: receiptImgBase64
     });
@@ -1464,6 +1544,13 @@ async function saveRepayment() {
     closeModal();
     showToast('Repayment logged · ' + receipt);
     renderPage(currentPage);
+
+    // Share receipt automatically
+    if (nextRep && nextRep.id) {
+      setTimeout(() => {
+        shareRepaymentReceipt(nextRep.id);
+      }, 500);
+    }
   } catch (e) {
     console.error(e);
     showToast('Failed to save repayment');
@@ -1473,6 +1560,7 @@ async function saveRepayment() {
     }
   }
 }
+
 
 function updateReminderPreview(borrowerId) {
   const b = borrowers.find(x => x.id === borrowerId);
@@ -1640,6 +1728,205 @@ function viewRepaymentReceipt(repaymentId) {
   </div>`;
 }
 window.viewRepaymentReceipt = viewRepaymentReceipt;
+
+// --- AUTOMATED RECEIPT GENERATION & WHATSAPP SHARING ---
+function sanitizeForPdf(text) {
+  if (!text) return '';
+  return text.normalize('NFD').replace(/[^\x00-\x7F]/g, '');
+}
+
+function generateReceiptPdf(borrowerName, borrowerPhone, amount, date, method, receiptNo, notes, loanBalance) {
+  try {
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a6'
+    });
+
+    const cleanLender = sanitizeForPdf(settings.lenderName || "LenderBook");
+    const cleanBorrower = sanitizeForPdf(borrowerName);
+    const cleanNotes = sanitizeForPdf(notes);
+
+    // Header
+    doc.setFont("Helvetica", "bold");
+    doc.setTextColor(28, 24, 68); // #1C1844
+    doc.setFontSize(14);
+    doc.text(cleanLender, 10, 15);
+    
+    doc.setFont("Helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(100, 100, 100);
+    doc.text("LENDER CONFIRMATION & RECEIPT", 10, 20);
+    
+    doc.setDrawColor(200, 200, 200);
+    doc.line(10, 22, 95, 22);
+
+    // Receipt details
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(9);
+    doc.setTextColor(50, 50, 50);
+    
+    doc.text("Receipt No:", 10, 30);
+    doc.setFont("Helvetica", "normal");
+    doc.text(receiptNo, 40, 30);
+
+    doc.setFont("Helvetica", "bold");
+    doc.text("Date:", 10, 36);
+    doc.setFont("Helvetica", "normal");
+    doc.text(date, 40, 36);
+
+    doc.setFont("Helvetica", "bold");
+    doc.text("Borrower:", 10, 42);
+    doc.setFont("Helvetica", "normal");
+    doc.text(`${cleanBorrower} (${borrowerPhone})`, 40, 42);
+
+    doc.setDrawColor(220, 220, 220);
+    doc.line(10, 46, 95, 46);
+
+    // Payment details
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text("Amount Paid:", 10, 54);
+    doc.setTextColor(59, 109, 17); // Green #3B6D11
+    doc.setFontSize(11);
+    doc.text(`Rs. ${amount.toLocaleString('en-IN')}`, 40, 54);
+    
+    doc.setFontSize(9);
+    doc.setTextColor(50, 50, 50);
+
+    doc.setFont("Helvetica", "bold");
+    doc.text("Payment Method:", 10, 62);
+    doc.setFont("Helvetica", "normal");
+    doc.text(method, 40, 62);
+
+    if (cleanNotes) {
+      doc.setFont("Helvetica", "bold");
+      doc.text("Notes:", 10, 70);
+      doc.setFont("Helvetica", "normal");
+      doc.text(cleanNotes, 40, 70);
+    }
+
+    doc.setFont("Helvetica", "bold");
+    doc.text("Remaining Bal:", 10, 78);
+    doc.setFont("Helvetica", "normal");
+    doc.setTextColor(24, 95, 165); // #185FA5
+    doc.text(`Rs. ${loanBalance.toLocaleString('en-IN')}`, 40, 78);
+    doc.setTextColor(50, 50, 50);
+
+    doc.setDrawColor(200, 200, 200);
+    doc.line(10, 84, 95, 84);
+
+    // Footer
+    doc.setFont("Helvetica", "italic");
+    doc.setFontSize(8);
+    doc.setTextColor(120, 120, 120);
+    doc.text("Thank you for your payment!", 10, 90);
+    doc.setFont("Helvetica", "normal");
+    doc.text("This is an electronically generated document.", 10, 94);
+
+    return doc.output('datauristring');
+  } catch (err) {
+    console.error('Error generating PDF:', err);
+    return '';
+  }
+}
+
+async function shareRepaymentReceipt(repaymentId) {
+  const r = repayments.find(x => x.id === repaymentId);
+  if (!r || !r.receiptImage) {
+    showToast('Receipt not found');
+    return;
+  }
+  const b = borrowers.find(x => x.id === r.borrowerId);
+  if (!b) return;
+
+  const receiptNo = r.receipt;
+  const rawBase64 = r.receiptImage;
+  const cleanPhone = b.phone.replace(/\D/g, '');
+  const finalPhone = cleanPhone.startsWith('91') ? cleanPhone : '91' + cleanPhone;
+  
+  const shareMsg = `Dear ${b.name}, payment of ${fmt(r.amount)} received on ${r.paidOn} via ${r.method}. Receipt #${r.receipt}. Thank you! - ${settings.lenderName || "LenderBook"}`;
+
+  if (rawBase64.startsWith('data:application/pdf;base64,')) {
+    try {
+      const base64Data = rawBase64.split(',')[1];
+      const blob = base64toBlob(base64Data, 'application/pdf');
+      const file = new File([blob], `Receipt-${receiptNo}.pdf`, { type: 'application/pdf' });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `Receipt ${receiptNo}`,
+          text: shareMsg
+        });
+        showToast('Receipt shared successfully!');
+        return;
+      }
+    } catch (err) {
+      console.error('Web Share failed, using fallback:', err);
+    }
+  }
+
+  showFallbackShareModal(r, b, shareMsg, finalPhone);
+}
+
+function base64toBlob(base64Data, contentType) {
+  contentType = contentType || '';
+  const sliceSize = 1024;
+  const byteCharacters = atob(base64Data);
+  const byteArrays = [];
+
+  for (let offset = 0; offset < byteCharacters.length; offset += sliceSize) {
+    const slice = byteCharacters.slice(offset, offset + sliceSize);
+    const byteNumbers = new Array(slice.length);
+    for (let i = 0; i < slice.length; i++) {
+      byteNumbers[i] = slice.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    byteArrays.push(byteArray);
+  }
+  return new Blob(byteArrays, { type: contentType });
+}
+
+function downloadPdfFromBase64(base64DataUrl, fileName) {
+  const link = document.createElement('a');
+  link.href = base64DataUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function showFallbackShareModal(repayment, borrower, shareMsg, finalPhone) {
+  // Download the receipt first
+  downloadPdfFromBase64(repayment.receiptImage, `Receipt-${repayment.receipt}.pdf`);
+  showToast('Receipt PDF downloaded!');
+
+  const whatsappUrl = `https://api.whatsapp.com/send?phone=${finalPhone}&text=${encodeURIComponent(shareMsg)}`;
+
+  document.getElementById('modal-container').innerHTML = `
+  <div class="modal-overlay" onclick="window.closeModal()">
+    <div class="modal" onclick="event.stopPropagation()" style="max-width:420px; text-align:center; padding: 24px;">
+      <div style="font-size: 40px; color: #25D366; margin-bottom: 12px;">
+        <i class="ti ti-brand-whatsapp"></i>
+      </div>
+      <h3 style="margin-bottom: 8px; font-weight:600; color:var(--color-text-primary);">Receipt Shared via WhatsApp</h3>
+      <p style="font-size: 13px; color: var(--color-text-secondary); margin-bottom: 20px; line-height: 1.5; text-align: left;">
+        We have automatically downloaded the receipt PDF:<br>
+        <strong>Receipt-${repayment.receipt}.pdf</strong><br><br>
+        Click below to open the WhatsApp chat for <strong>${borrower.name}</strong> (${borrower.phone}) and attach/upload the PDF.
+      </p>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <a href="${whatsappUrl}" target="_blank" onclick="window.closeModal()" class="btn" style="background:#25D366; color:white; border:none; display:inline-flex; align-items:center; justify-content:center; gap:8px; font-weight:600; padding:10px; text-decoration:none; border-radius:var(--border-radius-md);">
+          <i class="ti ti-brand-whatsapp"></i> Open WhatsApp Chat
+        </a>
+        <button class="btn" onclick="window.closeModal()">Close</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+window.shareRepaymentReceipt = shareRepaymentReceipt;
 
 async function closeLoan(id) {
   await updateLoanStatus(id, 'CLOSED');
@@ -2235,6 +2522,14 @@ function showPasswordLockOverlay() {
   }
 }
 
+function initRealtimeSms() {
+  subscribeToRealtimeSms(async (newSms) => {
+    await processIncomingSmsRow(newSms);
+    await refreshData();
+    renderPage(currentPage);
+  });
+}
+
 function unlockApp() {
   const input = document.getElementById('lock-pass-input').value;
   const errorEl = document.getElementById('lock-error-msg');
@@ -2245,6 +2540,7 @@ function unlockApp() {
     document.getElementById('app').style.filter = 'none';
     refreshData().then(() => {
       nav('dashboard');
+      initRealtimeSms();
     });
   } else {
     if (errorEl) {
@@ -2266,6 +2562,7 @@ document.addEventListener('DOMContentLoaded', () => {
   } else {
     refreshData().then(() => {
       nav('dashboard');
+      initRealtimeSms();
     });
   }
 });
