@@ -837,7 +837,7 @@ function renderDashboard() {
 }
 
 function renderBorrowers() {
-  const filtered = borrowers.filter(b => !searchQ || b.name.toLowerCase().includes(searchQ.toLowerCase()) || b.phone.includes(searchQ));
+  const filtered = borrowers.filter(b => !searchQ || matchSearchText(b.name, searchQ) || matchSearchText(b.phone, searchQ) || (b.village && matchSearchText(b.village, searchQ)));
   return `
   <div class="topbar-section">
     <input class="search-bar" placeholder="${t('search')}" value="${searchQ}" oninput="window.searchQ=this.value; window.renderPage('borrowers')" />
@@ -928,7 +928,7 @@ function renderLoans() {
   const filter = document.getElementById('loan-filter')?.value || 'ALL';
   const filtered = loans.filter(l => {
     const matchFilter = filter === 'ALL' || l.status === filter;
-    const matchSearch = !searchQ || borrowerName(l.borrowerId).toLowerCase().includes(searchQ.toLowerCase());
+    const matchSearch = !searchQ || matchSearchText(borrowerName(l.borrowerId), searchQ);
     return matchFilter && matchSearch;
   });
   return `
@@ -996,7 +996,7 @@ function renderLoanDetail(id) {
 
 function renderRepayments() {
   const sorted = repayments.slice().sort((a, b) => new Date(b.paidOn) - new Date(a.paidOn));
-  const filtered = sorted.filter(r => !searchQ || borrowerName(r.borrowerId).toLowerCase().includes(searchQ.toLowerCase()));
+  const filtered = sorted.filter(r => !searchQ || matchSearchText(borrowerName(r.borrowerId), searchQ));
   const total = filtered.reduce((s, r) => s + r.amount, 0);
 
   const grouped = {};
@@ -2997,6 +2997,110 @@ function lockAppNow() {
   showToast('Application locked.');
 }
 
+// --- TELUGU TRANSLITERATION & PHONETIC SEARCH MATCHING ---
+function transliterateTeluguToEnglish(text) {
+  const vowels = {
+    'అ': 'a', 'ఆ': 'aa', 'ఇ': 'i', 'ఈ': 'ee', 'ఉ': 'u', 'ఊ': 'oo', 'ఋ': 'ru', 'ఎ': 'e', 'ఏ': 'ae', 'ఐ': 'ai', 'ఒ': 'o', 'ఓ': 'o', 'ఔ': 'ou', 'అం': 'am', 'అః': 'aha',
+    '\u0c3e': 'a', // ా
+    '\u0c3f': 'i', // ి
+    '\u0c40': 'ee', // ీ
+    '\u0c41': 'u', // ు
+    '\u0c42': 'oo', // ూ
+    '\u0c46': 'e', // ె
+    '\u0c47': 'e', // ే
+    '\u0c48': 'ai', // ై
+    '\u0c4a': 'o', // ొ
+    '\u0c4b': 'o', // ో
+    '\u0c4c': 'ou', // ౌ
+    '\u0c4d': '', // ్
+    '\u0c02': 'm', // ం
+  };
+
+  const consonants = {
+    'క': 'k', 'ఖ': 'kh', 'గ': 'g', 'ఘ': 'gh', 'ఙ': 'gn',
+    'చ': 'ch', 'ఛ': 'ch', 'జ': 'j', 'ఝ': 'jh', 'ఞ': 'gn',
+    'ట': 't', 'ఠ': 'th', 'డ': 'd', 'ఢ': 'dh', 'ణ': 'n',
+    'త': 't', 'థ': 'th', 'ద': 'd', 'ధ': 'dh', 'న': 'n',
+    'ప': 'p', 'ఫ': 'ph', 'బ': 'b', 'భ': 'bh', 'మ': 'm',
+    'య': 'y', 'ర': 'r', 'ల': 'l', 'వ': 'v', 'శ': 'sh', 'ష': 'sh', 'స': 's', 'హ': 'h', 'ళ': 'l', 'క్ష': 'ksh', 'ఱ': 'r'
+  };
+
+  let result = '';
+  let i = 0;
+  while (i < text.length) {
+    const char = text[i];
+    
+    if (consonants[char]) {
+      let unit = consonants[char];
+      let next = text[i + 1];
+      if (next === '\u0c4d') { // virama
+        result += unit;
+        i += 2;
+      } else if (vowels[next]) { // vowel sign
+        result += unit + vowels[next];
+        i += 2;
+      } else { // implicit 'a'
+        result += unit + 'a';
+        i += 1;
+      }
+    } else if (vowels[char]) {
+      result += vowels[char];
+      i += 1;
+    } else {
+      result += char;
+      i += 1;
+    }
+  }
+  return result
+    .replace(/aa/g, 'a')
+    .replace(/ee/g, 'i')
+    .replace(/oo/g, 'u')
+    .replace(/th/g, 't')
+    .replace(/dh/g, 'd')
+    .trim();
+}
+
+function matchSearchText(nameOrPhone, query) {
+  if (!query) return true;
+  if (!nameOrPhone) return false;
+  
+  let englishQuery = query.toLowerCase();
+  const containsTelugu = /[\u0c00-\u0c7f]/.test(query);
+  if (containsTelugu) {
+    englishQuery = transliterateTeluguToEnglish(query);
+  }
+  
+  const clean = (s) => s.toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/double/g, '')
+    .replace(/bh/g, 'b').replace(/ph/g, 'p').replace(/dh/g, 'd').replace(/th/g, 't').replace(/gh/g, 'g').replace(/kh/g, 'k')
+    .replace(/sh/g, 's')
+    .replace(/ee/g, 'i').replace(/oo/g, 'u').replace(/aa/g, 'a')
+    .replace(/y/g, 'i')
+    .replace(/w/g, 'v')
+    .replace(/m/g, 'n')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const cleanQuery = clean(englishQuery);
+  const cleanName = clean(nameOrPhone);
+  
+  if (cleanName.includes(cleanQuery)) return true;
+  
+  const words = cleanQuery.split(' ').filter(w => w.length > 1);
+  if (words.length === 0) return cleanName.includes(cleanQuery);
+  
+  const fillers = ['show', 'loan', 'for', 'please', 'call', 'search', 'find', 'borrower', 'customer', 'me', 'naku', 'ki', 'nu', 'to', 'చేయి', 'చూపించు', 'అప్పు', 'నెల', 'రసీదు', 'గారు', 'दिखाओ', 'दिखाइए', 'కా', 'को', 'ऋण', 'लोन', 'फोन', 'करो'];
+  const cleanFillers = fillers.map(f => clean(f));
+  const searchWords = words.filter(w => !cleanFillers.includes(w));
+  
+  if (searchWords.length === 0) {
+    return words.some(w => cleanName.includes(w));
+  }
+  
+  return searchWords.some(w => cleanName.includes(w));
+}
+
 // --- VOICE COMMAND ASSISTANT (WEB SPEECH API) ---
 function startVoiceSearch() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -3008,17 +3112,17 @@ function startVoiceSearch() {
   const recognition = new SpeechRecognition();
   recognition.continuous = false;
   recognition.interimResults = false;
-  recognition.lang = lang === 'te' ? 'te-IN' : lang === 'hi' ? 'hi-IN' : 'en-US';
+  // Always use te-IN for English/Telugu languages to capture Telugu names correctly, use hi-IN for Hindi.
+  recognition.lang = lang === 'hi' ? 'hi-IN' : 'te-IN';
   
   isListeningSpeech = true;
   updateTopbar();
   showToast('Listening... Speak a tab name or borrower name.');
   
   recognition.onresult = (e) => {
-    const speech = e.results[0][0].transcript.trim().toLowerCase();
+    const speech = e.results[0][0].transcript.trim();
     showToast(`Heard: "${speech}"`);
     
-    // Command matching
     const term = speech.toLowerCase();
     
     // English commands
@@ -3533,7 +3637,7 @@ function renderBorrowings() {
   const totalOutstandingGiven = activeGivenLoans.reduce((s, l) => s + calcOutstanding(l), 0);
   const netOwnCapital = totalOutstandingGiven - outstandingBorrowed;
   
-  const filtered = borrowings.filter(b => !searchQ || b.lenderName.toLowerCase().includes(searchQ.toLowerCase()));
+  const filtered = borrowings.filter(b => !searchQ || matchSearchText(b.lenderName, searchQ));
 
   return `
   <div class="stat-grid">
