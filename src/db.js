@@ -483,3 +483,28 @@ export function subscribeToRealtimeSms(callback) {
   return null;
 }
 
+export async function uploadReceiptFile(fileName, fileBlob) {
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.storage
+        .from('receipts')
+        .upload(fileName, fileBlob, {
+          cacheControl: '3600',
+          upsert: true
+        });
+      if (error) {
+        console.error('Supabase storage upload error:', error);
+        return null;
+      }
+      const { data: urlData } = supabase.storage
+        .from('receipts')
+        .getPublicUrl(fileName);
+      return urlData ? urlData.publicUrl : null;
+    } catch (e) {
+      console.error('Supabase storage exception:', e);
+    }
+  }
+  return null;
+}
+
+

@@ -18,7 +18,8 @@ import {
   getUnprocessedSms,
   markSmsProcessed,
   addRawSms,
-  subscribeToRealtimeSms
+  subscribeToRealtimeSms,
+  uploadReceiptFile
 } from './db.js';
 import { parseBankSMS, matchVPAToBorrower, SAMPLE_SMS } from './sms-parser.js';
 import { jsPDF } from 'jspdf';
@@ -1517,8 +1518,8 @@ async function saveRepayment() {
 
     const receipt = 'REC-' + String(nextRepaymentId++).padStart(3, '0');
     
-    // Auto-generate receipt PDF
-    const receiptImgBase64 = generateReceiptPdf(
+    // Auto-generate receipt image (canvas PNG) for inline viewing
+    const receiptImgBase64 = generateReceiptImage(
       borrowerNameStr,
       borrowerPhoneStr,
       amt,
@@ -1735,6 +1736,130 @@ function sanitizeForPdf(text) {
   return text.normalize('NFD').replace(/[^\x00-\x7F]/g, '');
 }
 
+function generateReceiptImage(borrowerName, borrowerPhone, amount, date, method, receiptNo, notes, loanBalance) {
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = 400;
+    canvas.height = 420;
+    const ctx = canvas.getContext('2d');
+
+    // Background
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Border/Outline card style
+    ctx.strokeStyle = '#E2E8F0';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
+
+    // Title block background
+    ctx.fillStyle = '#1C1844'; // Primary color
+    ctx.fillRect(10, 10, canvas.width - 20, 50);
+
+    // Lender Title
+    ctx.fillStyle = '#FFFFFF';
+    ctx.font = 'bold 15px sans-serif';
+    ctx.fillText(sanitizeForPdf(settings.lenderName) || 'LenderBook', 24, 40);
+
+    // Receipt Slip text
+    ctx.fillStyle = '#10B981'; // Accent green
+    ctx.font = 'bold 10px sans-serif';
+    ctx.fillText('OFFICIAL RECEIPT', 280, 39);
+
+    // Details
+    ctx.fillStyle = '#475569';
+    ctx.font = 'bold 11px sans-serif';
+    
+    let y = 90;
+    ctx.fillText('Receipt No:', 30, y);
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = '#1E293B';
+    ctx.fillText(receiptNo, 140, y);
+
+    y += 24;
+    ctx.fillStyle = '#475569';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.fillText('Date:', 30, y);
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = '#1E293B';
+    ctx.fillText(date, 140, y);
+
+    y += 24;
+    ctx.fillStyle = '#475569';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.fillText('Borrower:', 30, y);
+    ctx.font = '11px sans-serif';
+    ctx.fillStyle = '#1E293B';
+    ctx.fillText(`${sanitizeForPdf(borrowerName)} (${borrowerPhone})`, 140, y);
+
+    // Divider
+    y += 16;
+    ctx.beginPath();
+    ctx.moveTo(30, y);
+    ctx.lineTo(canvas.width - 30, y);
+    ctx.strokeStyle = '#E2E8F0';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Payment details
+    y += 26;
+    ctx.fillStyle = '#475569';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.fillText('Amount Paid:', 30, y);
+    ctx.fillStyle = '#059669'; // Green
+    ctx.font = 'bold 14px sans-serif';
+    ctx.fillText(`Rs. ${amount.toLocaleString('en-IN')}`, 140, y);
+
+    y += 26;
+    ctx.fillStyle = '#475569';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.fillText('Payment Method:', 30, y);
+    ctx.fillStyle = '#1E293B';
+    ctx.font = '11px sans-serif';
+    ctx.fillText(method, 140, y);
+
+    if (notes) {
+      y += 24;
+      ctx.fillStyle = '#475569';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.fillText('Notes:', 30, y);
+      ctx.fillStyle = '#1E293B';
+      ctx.font = '11px sans-serif';
+      ctx.fillText(sanitizeForPdf(notes), 140, y);
+    }
+
+    y += 24;
+    ctx.fillStyle = '#475569';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.fillText('Remaining Bal:', 30, y);
+    ctx.fillStyle = '#2563EB'; // Blue
+    ctx.font = 'bold 12px sans-serif';
+    ctx.fillText(`Rs. ${loanBalance.toLocaleString('en-IN')}`, 140, y);
+
+    // Divider
+    y += 16;
+    ctx.beginPath();
+    ctx.moveTo(30, y);
+    ctx.lineTo(canvas.width - 30, y);
+    ctx.strokeStyle = '#E2E8F0';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // Footer
+    y += 24;
+    ctx.fillStyle = '#94A3B8';
+    ctx.font = 'italic 9px sans-serif';
+    ctx.fillText('Thank you for your payment!', 30, y);
+    y += 14;
+    ctx.fillText('This is a system generated view format copy.', 30, y);
+
+    return canvas.toDataURL('image/png');
+  } catch (err) {
+    console.error('Canvas error:', err);
+    return '';
+  }
+}
+
 function generateReceiptPdf(borrowerName, borrowerPhone, amount, date, method, receiptNo, notes, loanBalance) {
   try {
     const doc = new jsPDF({
@@ -1833,41 +1958,52 @@ function generateReceiptPdf(borrowerName, borrowerPhone, amount, date, method, r
 
 async function shareRepaymentReceipt(repaymentId) {
   const r = repayments.find(x => x.id === repaymentId);
-  if (!r || !r.receiptImage) {
+  if (!r) {
     showToast('Receipt not found');
     return;
   }
   const b = borrowers.find(x => x.id === r.borrowerId);
-  if (!b) return;
+  const l = loans.find(x => x.id === r.loanId);
+  if (!b || !l) return;
 
   const receiptNo = r.receipt;
-  const rawBase64 = r.receiptImage;
   const cleanPhone = b.phone.replace(/\D/g, '');
   const finalPhone = cleanPhone.startsWith('91') ? cleanPhone : '91' + cleanPhone;
   
-  const shareMsg = `Dear ${b.name}, payment of ${fmt(r.amount)} received on ${r.paidOn} via ${r.method}. Receipt #${r.receipt}. Thank you! - ${settings.lenderName || "LenderBook"}`;
+  showToast('Preparing automated WhatsApp message...', 3000);
 
-  if (rawBase64.startsWith('data:application/pdf;base64,')) {
-    try {
-      const base64Data = rawBase64.split(',')[1];
-      const blob = base64toBlob(base64Data, 'application/pdf');
-      const file = new File([blob], `Receipt-${receiptNo}.pdf`, { type: 'application/pdf' });
+  let pdfLink = '';
+  try {
+    const stats = getLoanStats(l);
+    const pdfBase64 = generateReceiptPdf(
+      b.name,
+      b.phone,
+      r.amount,
+      r.paidOn,
+      r.method,
+      r.receipt,
+      r.notes,
+      stats.amountLeft
+    );
 
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({
-          files: [file],
-          title: `Receipt ${receiptNo}`,
-          text: shareMsg
-        });
-        showToast('Receipt shared successfully!');
-        return;
+    if (pdfBase64) {
+      const base64Data = pdfBase64.split(',')[1];
+      const pdfBlob = base64toBlob(base64Data, 'application/pdf');
+      const publicUrl = await uploadReceiptFile(`Receipt-${receiptNo}.pdf`, pdfBlob);
+      if (publicUrl) {
+        pdfLink = publicUrl;
       }
-    } catch (err) {
-      console.error('Web Share failed, using fallback:', err);
     }
+  } catch (err) {
+    console.error('Failed to generate or upload PDF receipt:', err);
   }
 
-  showFallbackShareModal(r, b, shareMsg, finalPhone);
+  // Pre-fill text with the PDF link
+  const shareMsg = `Dear ${b.name}, payment of ${fmt(r.amount)} received on ${r.paidOn} via ${r.method}. Receipt #${r.receipt}.${pdfLink ? ` View PDF Receipt: ${pdfLink}` : ''} Thank you! - ${settings.lenderName || "LenderBook"}`;
+  
+  const whatsappUrl = `https://api.whatsapp.com/send?phone=${finalPhone}&text=${encodeURIComponent(shareMsg)}`;
+  window.open(whatsappUrl, '_blank');
+  showToast('WhatsApp opened!');
 }
 
 function base64toBlob(base64Data, contentType) {
@@ -1888,45 +2024,8 @@ function base64toBlob(base64Data, contentType) {
   return new Blob(byteArrays, { type: contentType });
 }
 
-function downloadPdfFromBase64(base64DataUrl, fileName) {
-  const link = document.createElement('a');
-  link.href = base64DataUrl;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-}
-
-function showFallbackShareModal(repayment, borrower, shareMsg, finalPhone) {
-  // Download the receipt first
-  downloadPdfFromBase64(repayment.receiptImage, `Receipt-${repayment.receipt}.pdf`);
-  showToast('Receipt PDF downloaded!');
-
-  const whatsappUrl = `https://api.whatsapp.com/send?phone=${finalPhone}&text=${encodeURIComponent(shareMsg)}`;
-
-  document.getElementById('modal-container').innerHTML = `
-  <div class="modal-overlay" onclick="window.closeModal()">
-    <div class="modal" onclick="event.stopPropagation()" style="max-width:420px; text-align:center; padding: 24px;">
-      <div style="font-size: 40px; color: #25D366; margin-bottom: 12px;">
-        <i class="ti ti-brand-whatsapp"></i>
-      </div>
-      <h3 style="margin-bottom: 8px; font-weight:600; color:var(--color-text-primary);">Receipt Shared via WhatsApp</h3>
-      <p style="font-size: 13px; color: var(--color-text-secondary); margin-bottom: 20px; line-height: 1.5; text-align: left;">
-        We have automatically downloaded the receipt PDF:<br>
-        <strong>Receipt-${repayment.receipt}.pdf</strong><br><br>
-        Click below to open the WhatsApp chat for <strong>${borrower.name}</strong> (${borrower.phone}) and attach/upload the PDF.
-      </p>
-      <div style="display:flex; flex-direction:column; gap:10px;">
-        <a href="${whatsappUrl}" target="_blank" onclick="window.closeModal()" class="btn" style="background:#25D366; color:white; border:none; display:inline-flex; align-items:center; justify-content:center; gap:8px; font-weight:600; padding:10px; text-decoration:none; border-radius:var(--border-radius-md);">
-          <i class="ti ti-brand-whatsapp"></i> Open WhatsApp Chat
-        </a>
-        <button class="btn" onclick="window.closeModal()">Close</button>
-      </div>
-    </div>
-  </div>`;
-}
-
 window.shareRepaymentReceipt = shareRepaymentReceipt;
+
 
 async function closeLoan(id) {
   await updateLoanStatus(id, 'CLOSED');
