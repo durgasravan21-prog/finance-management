@@ -3768,7 +3768,6 @@ function renderBorrowingDetail(id) {
               <div style="font-size:11px; color:var(--color-text-tertiary); margin-top:2px;">Method: ${r.method} · Date: ${r.paidOn}</div>
               ${r.notes ? `<div style="font-size:10px; color:var(--color-text-secondary); margin-top:1px;">"${r.notes}"</div>` : ''}
             </div>
-            <a href="#" onclick="window.deleteBorrowingRepayment(${r.id}, ${b.id})" style="color:#A32D2D; text-decoration:none; font-weight:700;">✕</a>
           </div>
         `).join('')}
       </div>
