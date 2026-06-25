@@ -371,6 +371,21 @@ async function processUnprocessedSms() {
   }
 }
 
+// --- ANDROID WEBVIEW SMS BRIDGE ---
+window.handleAndroidIncomingSMS = async function(sender, body) {
+  console.log("handleAndroidIncomingSMS called from native app wrapper:", sender, body);
+  try {
+    const newSms = await addRawSms({ smsText: body, sender: sender });
+    await processIncomingSmsRow(newSms);
+    await refreshData();
+    if (typeof renderPage === 'function' && typeof currentPage !== 'undefined') {
+      renderPage(currentPage);
+    }
+  } catch (err) {
+    console.error("Error in handleAndroidIncomingSMS:", err);
+  }
+};
+
 // --- DB SYNC HELPERS ---
 async function refreshData() {
   borrowers = await getBorrowers();
