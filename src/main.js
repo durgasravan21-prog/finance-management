@@ -389,6 +389,7 @@ window.handleAndroidIncomingSMS = async function(sender, body) {
 // --- ANDROID WEBVIEW VERSION CHECK BRIDGE ---
 async function checkAppVersion() {
   let minRequiredVersionCode = 1;
+  let latestVersionCode = 1;
   let latestVersionName = '1.2';
   let downloadUrl = 'https://finance-beta-three.vercel.app/LenderBook.apk';
   
@@ -397,6 +398,7 @@ async function checkAppVersion() {
     if (response.ok) {
       const data = await response.json();
       minRequiredVersionCode = data.minRequiredVersionCode || 1;
+      latestVersionCode = data.latestVersionCode || 1;
       latestVersionName = data.latestVersionName || '1.2';
       downloadUrl = data.downloadUrl || downloadUrl;
     }
@@ -404,11 +406,8 @@ async function checkAppVersion() {
     console.error("Error fetching app-version.json:", err);
   }
 
-  // Dynamically update download APK text if element exists
-  const downloadBtnText = document.querySelector('#sidebar-download-apk span');
-  if (downloadBtnText) {
-    downloadBtnText.textContent = `Download App (v${latestVersionName})`;
-  }
+  const downloadBtn = document.getElementById('sidebar-download-apk');
+  const downloadBtnText = downloadBtn ? downloadBtn.querySelector('span') : null;
 
   if (window.AndroidInterface) {
     try {
@@ -416,12 +415,36 @@ async function checkAppVersion() {
         ? window.AndroidInterface.getAppVersionCode()
         : 1;
 
+      // If they are in the app, only show update button if a new update is available
+      if (currentVersionCode < latestVersionCode) {
+        if (downloadBtn) {
+          downloadBtn.style.display = 'flex';
+          downloadBtn.style.color = '#10B981'; // Green for update
+          if (downloadBtnText) {
+            downloadBtnText.textContent = `Update App (v${latestVersionName})`;
+          }
+        }
+      } else {
+        // Up-to-date! Remove/hide the option
+        if (downloadBtn) {
+          downloadBtn.style.display = 'none';
+        }
+      }
+
       if (currentVersionCode < minRequiredVersionCode) {
         showUpdateRequiredOverlay(downloadUrl, latestVersionName);
         return true;
       }
     } catch (err) {
       console.error("Error checking app version in AndroidInterface:", err);
+    }
+  } else {
+    // If not in the app (web browser), always display the download link
+    if (downloadBtn) {
+      downloadBtn.style.display = 'flex';
+      if (downloadBtnText) {
+        downloadBtnText.textContent = `Download App (v${latestVersionName})`;
+      }
     }
   }
   return false;
@@ -4122,12 +4145,6 @@ window.closeBorrowing = closeBorrowing;
 // --- INITIALIZATION ---
 document.addEventListener('DOMContentLoaded', async () => {
   updateLenderNameUI();
-  
-  // Show download link if not running in the new app wrapper
-  if (!window.AndroidInterface) {
-    const downloadBtn = document.getElementById('sidebar-download-apk');
-    if (downloadBtn) downloadBtn.style.display = 'flex';
-  }
   
   // Set the app version label dynamically
   let currentVersionName = 'Web v1.2';
