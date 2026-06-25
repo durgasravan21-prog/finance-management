@@ -15,20 +15,31 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.example.lenderbook.theme.LenderBookTheme
 
 class MainActivity : ComponentActivity() {
 
   private var webView: WebView? = null
-  private val PERMISSION_REQUEST_CODE = 101
+
+  private val requestPermissionLauncher = registerForActivityResult(
+    ActivityResultContracts.RequestMultiplePermissions()
+  ) { permissions ->
+    val receiveSmsGranted = permissions[Manifest.permission.RECEIVE_SMS] ?: false
+    val readSmsGranted = permissions[Manifest.permission.READ_SMS] ?: false
+    val sendSmsGranted = permissions[Manifest.permission.SEND_SMS] ?: false
+
+    if (receiveSmsGranted || readSmsGranted || sendSmsGranted) {
+      Toast.makeText(this, "SMS permissions processed.", Toast.LENGTH_SHORT).show()
+    }
+  }
 
   private val smsReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -49,7 +60,7 @@ class MainActivity : ComponentActivity() {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
 
-    requestSmsPermissions()
+    checkAndRequestPermissions()
 
     setContent {
       LenderBookTheme {
@@ -72,16 +83,17 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  private fun requestSmsPermissions() {
+  private fun checkAndRequestPermissions() {
     val permissions = arrayOf(
       Manifest.permission.RECEIVE_SMS,
-      Manifest.permission.READ_SMS
+      Manifest.permission.READ_SMS,
+      Manifest.permission.SEND_SMS
     )
     val neededPermissions = permissions.filter {
       ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
     }
     if (neededPermissions.isNotEmpty()) {
-      ActivityCompat.requestPermissions(this, neededPermissions.toTypedArray(), PERMISSION_REQUEST_CODE)
+      requestPermissionLauncher.launch(neededPermissions.toTypedArray())
     }
   }
 

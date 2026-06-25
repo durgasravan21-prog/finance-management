@@ -1,0 +1,980 @@
+%PDF-1.3
+%ºß¬à
+3 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 4 0 R
+>>
+endobj
+4 0 obj
+<<
+/Length 5490
+>>
+stream
+0.5670000000000001 w
+0 G
+BT
+/F2 22 Tf
+25.2999999999999972 TL
+0 g
+42.5196850393700814 785.1970866141732586 Td
+(LenderBook  Ramaiah Finance) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 739.8427559055118081 Td
+(LenderBook is a premium, full-featured lender management dashboard designed to track given loans, borrowers,) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 725.6695275590550409 Td
+(repayments, borrowings \(loans taken\), and daily route expenses. It is optimized for use in local village finance) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 711.4962992125983874 Td
+(businesses with offline-first capabilities \(caching data in `localStorage` and syncing with Supabase when) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 697.3230708661417339 Td
+(connected\), and includes a native Android wrapper app that intercepts banking SMS alerts to automatically) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 683.1498425196850803 Td
+(reconcile payments.) Tj
+ET
+0.78 G
+42.5196850393700814 657.6380314960629221 m
+552.7559055118110791 657.6380314960629221 l
+S
+BT
+/F2 16 Tf
+18.3999999999999986 TL
+0 g
+42.5196850393700814 629.291574803149615 Td
+( Architecture Overview) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 589.6065354330708033 Td
+(The system consists of two primary components:) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 564.0947244094487587 Td
+(1. **Web Dashboard \(PWA\)**:) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 549.9214960629921052 Td
+(   * Built with HTML, Vanilla CSS, and JavaScript.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 535.748267716535338 Td
+(   * Uses **Vite** for fast compiling and building.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 521.5750393700786844 Td
+(   * Integrated with **Supabase** for cloud storage, user accounts, and real-time database sync.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 507.4018110236219741 Td
+(   * Stores records locally in `localStorage` to allow 100% functional offline operations, which automatically syncs) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 493.2285826771653205 Td
+(back when a network connection is detected.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 467.716771653543276 Td
+(2. **Native Android Wrapper \(`lenderbook-android`\)**:) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 453.5435433070865656 Td
+(   * Built with Kotlin, Jetpack Compose, and Gradle.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 439.3703149606298552 Td
+(   * Wraps the live hosted dashboard \(`https://finance-beta-three.vercel.app`\) in a fullscreen WebView container.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 425.1970866141731449 Td
+(   * Requests native Android permissions \(`RECEIVE_SMS` and `READ_SMS`\) to run an SMS BroadcastReceiver) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 411.0238582677164914 Td
+(that intercepts credit notifications from banks and forwards them directly to the web app interface.) Tj
+ET
+0.78 G
+42.5196850393700814 385.51204724409439 m
+552.7559055118110791 385.51204724409439 l
+S
+BT
+/F2 16 Tf
+18.3999999999999986 TL
+0 g
+42.5196850393700814 357.1655905511810261 Td
+( Android Application Details) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 317.480551181102328 Td
+(The Android application folder is located at `/lenderbook-android`.) Tj
+ET
+BT
+/F2 12 Tf
+13.7999999999999989 TL
+0 g
+42.5196850393700814 291.9687401574802834 Td
+(1. WebView Settings) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 269.2915748031495013 Td
+(In order for the web dashboard to function properly within the native container, the WebView in `MainActivity.kt` is) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 255.1183464566928478 Td
+(configured with:) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 240.9451181102361943 Td
+(- **JavaScript Enabled**: Necessary for rendering the dynamic web page and executing client-side scripts.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 226.7718897637794271 Td
+(- **DOM Storage Enabled**: Crucial for keeping Supabase authentication tokens and client-side database caches) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 212.5986614173227736 Td
+(active.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 198.4254330708660063 Td
+(- **Database Caching Enabled**: Supports indexed database storage on the device.) Tj
+ET
+BT
+/F2 12 Tf
+13.7999999999999989 TL
+0 g
+42.5196850393700814 172.9136220472439618 Td
+(2. Native System Intents Bridge \(Dialer, SMS, WhatsApp\)) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 150.2364566929132934 Td
+(Since standard WebViews do not support custom URI schemes out of the box, `MainActivity.kt` intercepts the) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 136.0632283464566399 Td
+(following link clicks in the web application and launches native system intents:) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 121.8899999999998727 Td
+(- **Dialer \(`tel:+91...`\)**: Launches the native phone dialer with the borrower's number.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 107.7167716535432191 Td
+(- **System SMS \(`sms:+91...`\)**: Launches the native messaging app pre-filled with the reminder message.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 93.5435433070865656 Td
+(- **WhatsApp \(`whatsapp://...` or `https://wa.me/...`\)**: Launches the WhatsApp application to share PDF Passbook) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 79.3703149606297984 Td
+(ledgers directly.) Tj
+ET
+endstream
+endobj
+5 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 6 0 R
+>>
+endobj
+6 0 obj
+<<
+/Length 5367
+>>
+stream
+0.5670000000000001 w
+0.78 G
+0.78 G
+42.5196850393700814 785.1970866141731449 m
+552.7559055118110791 785.1970866141731449 l
+S
+BT
+/F2 16 Tf
+18.3999999999999986 TL
+0 g
+42.5196850393700814 756.8506299212598378 Td
+( Native SMS Interception & JS Bridge) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 717.1655905511811397 Td
+(To automate payment tracking, the Android app reads incoming banking SMS alerts and passes them directly to the) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 702.9923622047243725 Td
+(web dashboard.) Tj
+ET
+BT
+/F2 12 Tf
+13.7999999999999989 TL
+0 g
+42.5196850393700814 677.480551181102328 Td
+(A. Manifest Permissions) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 654.8033858267716596 Td
+(The app requests these permissions inside `AndroidManifest.xml`:) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 634.9608661417322537 Td
+(<!-- Allows loading the hosted Vercel URL -->) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 620.7876377952754865 Td
+(<uses-permission android:name="android.permission.INTERNET" />) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 606.614409448818833 Td
+(<!-- Allows listening to incoming SMS events -->) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 592.4411811023621794 Td
+(<uses-permission android:name="android.permission.RECEIVE_SMS" />) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 578.2679527559055259 Td
+(<!-- Allows reading message details \(sender header and message text\) -->) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 564.0947244094487587 Td
+(<uses-permission android:name="android.permission.READ_SMS" />) Tj
+ET
+BT
+/F2 12 Tf
+13.7999999999999989 TL
+0 g
+42.5196850393700814 532.9136220472440755 Td
+(B. SMS Interceptor Flow) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 510.2364566929133503 Td
+(1. Upon start, the app prompts the user to grant **SMS Permissions** using Android runtime dialogs.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 496.0632283464566399 Td
+(2. A dynamic `BroadcastReceiver` is registered to listen to `SMS_RECEIVED_ACTION`.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 481.8899999999999295 Td
+(3. When a new text message arrives, the receiver captures the sender \(e.g. `VK-HDFC`, `AX-SBI`\) and the) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 467.716771653543276 Td
+(message text.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 453.5435433070865656 Td
+(4. The receiver escapes any quotation marks and line breaks to prevent script injection.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 439.3703149606298552 Td
+(5. It invokes the JavaScript bridge in the WebView:) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 425.1970866141731449 Td
+(   ```javascript) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 411.0238582677164914 Td
+(   window.handleAndroidIncomingSMS\(sender, body\);) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 396.850629921259781 Td
+(   ```) Tj
+ET
+BT
+/F2 12 Tf
+13.7999999999999989 TL
+0 g
+42.5196850393700814 371.3388188976377364 Td
+(C. Web Application Hook) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 348.6616535433070112 Td
+(Inside [src/main.js]\(src/main.js\), the global bridge handler parses and processes the transaction:) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 328.8191338582676053 Td
+(window.handleAndroidIncomingSMS = async function\(sender, body\) {) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 314.6459055118109518 Td
+(  try {) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 300.4726771653542983 Td
+(    // 1. Logs raw SMS in offline/online cache) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 286.2994488188975311 Td
+(    const newSms = await addRawSms\({ smsText: body, sender: sender }\);) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 272.1262204724408775 Td
+(    // 2. Automatically parses the SMS \(identifies transaction amount & matches borrower via) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 257.952992125984224 Td
+(UPI/VPA\)) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 243.7797637795274568 Td
+(    await processIncomingSmsRow\(newSms\);) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 229.6065354330708033 Td
+(    // 3. Syncs data and updates the UI dashboard with toast alerts) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 215.4333070866141497 Td
+(    await refreshData\(\);) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 201.2600787401573825 Td
+(    renderPage\(currentPage\);) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 187.086850393700729 Td
+(  } catch \(err\) {) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 172.9136220472439618 Td
+(    console.error\("Error in handleAndroidIncomingSMS:", err\);) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 158.7403937007873083 Td
+(  }) Tj
+ET
+BT
+/F5 9 Tf
+10.3499999999999996 TL
+0 g
+42.5196850393700814 144.5671653543306547 Td
+(};) Tj
+ET
+0.78 G
+42.5196850393700814 113.3860629921258862 m
+552.7559055118110791 113.3860629921258862 l
+S
+BT
+/F2 16 Tf
+18.3999999999999986 TL
+0 g
+42.5196850393700814 85.0396062992125508 Td
+( Building & Installing the App) Tj
+ET
+endstream
+endobj
+7 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 8 0 R
+>>
+endobj
+8 0 obj
+<<
+/Length 3383
+>>
+stream
+0.5670000000000001 w
+0.78 G
+BT
+/F2 12 Tf
+13.7999999999999989 TL
+0 g
+42.5196850393700814 785.1970866141732586 Td
+(Prerequisites) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 762.5199212598424765 Td
+(- **Java Development Kit \(JDK\)**: JDK 17 is required. We recommend installing `Microsoft OpenJDK 17` or `Eclipse) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 748.346692913385823 Td
+(Temurin 17`.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 734.1734645669291695 Td
+(- **Android SDK**: Build Tools 36 and Platform Tools 37.) Tj
+ET
+BT
+/F2 12 Tf
+13.7999999999999989 TL
+0 g
+42.5196850393700814 708.6616535433070112 Td
+(Building the APK) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 685.9844881889763428 Td
+(1. Set your `JAVA_HOME` environment variable to point to your JDK installation.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 671.8112598425196893 Td
+(2. Navigate to the `lenderbook-android` directory.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 657.6380314960629221 Td
+(3. Run the Gradle build script to compile the project:) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 643.4648031496062686 Td
+(   ```powershell) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 629.291574803149615 Td
+(   # Windows PowerShell) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 615.1183464566928478 Td
+(   $env:JAVA_HOME = "C:\\Program Files\\Microsoft\\jdk-17.0.19.10-hotspot") Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 600.9451181102361943 Td
+(   $env:Path = "$env:JAVA_HOME\\bin;" + $env:Path) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 586.7718897637794271 Td
+(   cmd.exe /c ".\\gradlew.bat assembleDebug") Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 572.5986614173227736 Td
+(   ```) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 558.42543307086612 Td
+(4. Once completed, the debug APK will be generated at:) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 544.2522047244094665 Td
+(   `lenderbook-android/app/build/outputs/apk/debug/app-debug.apk`) Tj
+ET
+BT
+/F2 12 Tf
+13.7999999999999989 TL
+0 g
+42.5196850393700814 518.7403937007873083 Td
+(Installing on a Phone) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 496.0632283464566399 Td
+(For convenience, a compiled build is copied directly to the root project folder:) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 481.8899999999999295 Td
+(- **Pre-compiled APK**: [LenderBook.apk]\(LenderBook.apk\) \(approx. 11.9 MB\)) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 456.378188976377885 Td
+(**Steps to install**:) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 442.2049606299212314 Td
+(1. Copy the `LenderBook.apk` file to your Android phone \(via USB, email, or WhatsApp\).) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 428.0317322834645211 Td
+(2. Open the file on your phone using a File Manager app.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 413.8585039370078107 Td
+(3. If prompted, enable **"Install from Unknown Sources"** in your phone settings.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 399.6852755905511003 Td
+(4. Install the application.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 385.5120472440944468 Td
+(5. Open **LenderBook** and tap **"Allow"** on the prompt requesting permission to receive and read SMS) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+42.5196850393700814 371.3388188976377364 Td
+(messages.) Tj
+ET
+endstream
+endobj
+1 0 obj
+<</Type /Pages
+/Kids [3 0 R 5 0 R 7 0 R ]
+/Count 3
+>>
+endobj
+9 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+10 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+11 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-Oblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+12 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-BoldOblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+13 0 obj
+<<
+/Type /Font
+/BaseFont /Courier
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+14 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+15 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-Oblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+16 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-BoldOblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+17 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Roman
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+18 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+19 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Italic
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+20 0 obj
+<<
+/Type /Font
+/BaseFont /Times-BoldItalic
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+21 0 obj
+<<
+/Type /Font
+/BaseFont /ZapfDingbats
+/Subtype /Type1
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+22 0 obj
+<<
+/Type /Font
+/BaseFont /Symbol
+/Subtype /Type1
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+2 0 obj
+<<
+/ProcSet [/PDF /Text /ImageB /ImageC /ImageI]
+/Font <<
+/F1 9 0 R
+/F2 10 0 R
+/F3 11 0 R
+/F4 12 0 R
+/F5 13 0 R
+/F6 14 0 R
+/F7 15 0 R
+/F8 16 0 R
+/F9 17 0 R
+/F10 18 0 R
+/F11 19 0 R
+/F12 20 0 R
+/F13 21 0 R
+/F14 22 0 R
+>>
+/XObject <<
+>>
+>>
+endobj
+23 0 obj
+<<
+/Producer (jsPDF 4.2.1)
+/CreationDate (D:20260625110926+05'30')
+>>
+endobj
+24 0 obj
+<<
+/Type /Catalog
+/Pages 1 0 R
+/OpenAction [3 0 R /FitH null]
+/PageLayout /OneColumn
+>>
+endobj
+xref
+0 25
+0000000000 65535 f 
+0000014822 00000 n 
+0000016655 00000 n 
+0000000015 00000 n 
+0000000152 00000 n 
+0000005694 00000 n 
+0000005831 00000 n 
+0000011250 00000 n 
+0000011387 00000 n 
+0000014891 00000 n 
+0000015016 00000 n 
+0000015147 00000 n 
+0000015281 00000 n 
+0000015419 00000 n 
+0000015543 00000 n 
+0000015672 00000 n 
+0000015804 00000 n 
+0000015940 00000 n 
+0000016068 00000 n 
+0000016195 00000 n 
+0000016324 00000 n 
+0000016457 00000 n 
+0000016559 00000 n 
+0000016907 00000 n 
+0000016993 00000 n 
+trailer
+<<
+/Size 25
+/Root 24 0 R
+/Info 23 0 R
+/ID [ <7B8637127EBC31EEA76E93902C076CAC> <7B8637127EBC31EEA76E93902C076CAC> ]
+>>
+startxref
+17097
+%%EOF
