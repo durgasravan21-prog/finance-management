@@ -388,22 +388,40 @@ window.handleAndroidIncomingSMS = async function(sender, body) {
 
 // --- ANDROID WEBVIEW VERSION CHECK BRIDGE ---
 async function checkAppVersion() {
+  let minRequiredVersionCode = 1;
+  let latestVersionName = '1.2';
+  let downloadUrl = 'https://finance-beta-three.vercel.app/LenderBook.apk';
+  
+  try {
+    const response = await fetch('/app-version.json');
+    if (response.ok) {
+      const data = await response.json();
+      minRequiredVersionCode = data.minRequiredVersionCode || 1;
+      latestVersionName = data.latestVersionName || '1.2';
+      downloadUrl = data.downloadUrl || downloadUrl;
+    }
+  } catch (err) {
+    console.error("Error fetching app-version.json:", err);
+  }
+
+  // Dynamically update download APK text if element exists
+  const downloadBtnText = document.querySelector('#sidebar-download-apk span');
+  if (downloadBtnText) {
+    downloadBtnText.textContent = `Download App (v${latestVersionName})`;
+  }
+
   if (window.AndroidInterface) {
     try {
       const currentVersionCode = typeof window.AndroidInterface.getAppVersionCode === 'function'
         ? window.AndroidInterface.getAppVersionCode()
         : 1;
 
-      const response = await fetch('/app-version.json');
-      if (response.ok) {
-        const data = await response.json();
-        if (currentVersionCode < data.minRequiredVersionCode) {
-          showUpdateRequiredOverlay(data.downloadUrl || 'https://finance-beta-three.vercel.app/LenderBook.apk', data.latestVersionName || '1.1');
-          return true;
-        }
+      if (currentVersionCode < minRequiredVersionCode) {
+        showUpdateRequiredOverlay(downloadUrl, latestVersionName);
+        return true;
       }
     } catch (err) {
-      console.error("Error checking app version:", err);
+      console.error("Error checking app version in AndroidInterface:", err);
     }
   }
   return false;
@@ -432,7 +450,7 @@ function showUpdateRequiredOverlay(downloadUrl, version) {
   overlay.innerHTML = `
     <div style="max-width: 400px; padding: 32px; background: #241E5C; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); border: 1px solid #3E3697;">
       <div style="font-size: 64px; margin-bottom: 16px; color: #EF4444;">⚠️</div>
-      <h2 style="font-size: 24px; margin-bottom: 12px; font-weight: 700;">Update Required</h2>
+      <h2 style="font-size: 24px; margin-bottom: 12px; font-weight: 700;">Update Required (v${version})</h2>
       <p style="font-size: 14px; color: #94A3B8; margin-bottom: 24px; line-height: 1.5;">
         You are using an older version of the LenderBook app. A critical update (v${version}) is required to continue.
       </p>
@@ -4110,6 +4128,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     const downloadBtn = document.getElementById('sidebar-download-apk');
     if (downloadBtn) downloadBtn.style.display = 'flex';
   }
+  
+  // Set the app version label dynamically
+  let currentVersionName = 'Web v1.2';
+  if (window.AndroidInterface) {
+    if (typeof window.AndroidInterface.getAppVersionName === 'function') {
+      currentVersionName = 'App v' + window.AndroidInterface.getAppVersionName();
+    } else if (typeof window.AndroidInterface.getAppVersionCode === 'function') {
+      currentVersionName = 'App v1.1'; // fallback for old version code
+    } else {
+      currentVersionName = 'App v1.0';
+    }
+  }
+  const versionEl = document.getElementById('app-version-display');
+  if (versionEl) versionEl.textContent = currentVersionName;
   
   // 1. Force version update check first
   const updateBlocked = await checkAppVersion();

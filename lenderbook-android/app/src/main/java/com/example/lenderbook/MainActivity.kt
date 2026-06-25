@@ -156,6 +156,26 @@ class WebAppInterface(private val activity: MainActivity) {
 
   @JavascriptInterface
   fun getAppVersionCode(): Int {
-    return 2
+    return try {
+      val pInfo = activity.packageManager.getPackageInfo(activity.packageName, 0)
+      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+        pInfo.longVersionCode.toInt()
+      } else {
+        @Suppress("DEPRECATION")
+        pInfo.versionCode
+      }
+    } catch (e: Exception) {
+      3 // fallback to target version code
+    }
+  }
+
+  @JavascriptInterface
+  fun getAppVersionName(): String {
+    return try {
+      val pInfo = activity.packageManager.getPackageInfo(activity.packageName, 0)
+      pInfo.versionName ?: "1.2"
+    } catch (e: Exception) {
+      "1.2"
+    }
   }
 }
