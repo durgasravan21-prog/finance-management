@@ -1406,7 +1406,6 @@ function renderSettings() {
               <button class="btn btn-sm btn-primary" onclick="window.restoreJSON()">Restore</button>
             </div>
           </div>
-          <button class="btn btn-danger" onclick="window.clearLocalData()"><i class="ti ti-trash"></i> Reset All Demo Data</button>
         </div>
       </div>
 
