@@ -386,6 +386,69 @@ window.handleAndroidIncomingSMS = async function(sender, body) {
   }
 };
 
+// --- ANDROID WEBVIEW VERSION CHECK BRIDGE ---
+async function checkAppVersion() {
+  if (window.AndroidInterface) {
+    try {
+      const currentVersionCode = typeof window.AndroidInterface.getAppVersionCode === 'function'
+        ? window.AndroidInterface.getAppVersionCode()
+        : 1;
+
+      const response = await fetch('/app-version.json');
+      if (response.ok) {
+        const data = await response.json();
+        if (currentVersionCode < data.minRequiredVersionCode) {
+          showUpdateRequiredOverlay(data.downloadUrl || 'https://finance-beta-three.vercel.app/LenderBook.apk', data.latestVersionName || '1.1');
+          return true;
+        }
+      }
+    } catch (err) {
+      console.error("Error checking app version:", err);
+    }
+  }
+  return false;
+}
+
+function showUpdateRequiredOverlay(downloadUrl, version) {
+  const overlay = document.createElement('div');
+  overlay.id = 'update-required-overlay';
+  overlay.style = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: #1C1844;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 100000;
+    color: #FFFFFF;
+    padding: 24px;
+    text-align: center;
+    font-family: sans-serif;
+  `;
+  overlay.innerHTML = `
+    <div style="max-width: 400px; padding: 32px; background: #241E5C; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); border: 1px solid #3E3697;">
+      <div style="font-size: 64px; margin-bottom: 16px; color: #EF4444;">⚠️</div>
+      <h2 style="font-size: 24px; margin-bottom: 12px; font-weight: 700;">Update Required</h2>
+      <p style="font-size: 14px; color: #94A3B8; margin-bottom: 24px; line-height: 1.5;">
+        You are using an older version of the LenderBook app. A critical update (v${version}) is required to continue.
+      </p>
+      <a href="${downloadUrl}" style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none; padding: 12px 24px; font-weight: 600; font-size: 15px; border-radius: 8px; background: #534AB7; color: white; border: none; cursor: pointer;" target="_blank">
+        Download Update Now
+      </a>
+      <div style="margin-top: 16px; font-size: 11px; color: #64748B;">
+        After downloading, open the APK file to install the update.
+      </div>
+    </div>
+  `;
+  const app = document.getElementById('app');
+  if (app) app.style.filter = 'blur(8px)';
+  document.body.appendChild(overlay);
+}
+
 // --- DB SYNC HELPERS ---
 async function refreshData() {
   borrowers = await getBorrowers();
@@ -4039,8 +4102,12 @@ window.deleteBorrowingRepayment = deleteBorrowingRepayment;
 window.closeBorrowing = closeBorrowing;
 
 // --- INITIALIZATION ---
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   updateLenderNameUI();
+  
+  // 1. Force version update check first
+  const updateBlocked = await checkAppVersion();
+  if (updateBlocked) return; // Completely block application initialization!
   
   // Dynamic pop permission request for native Android app users on launch
   if (window.AndroidInterface && typeof window.AndroidInterface.requestSMSPermissions === 'function') {

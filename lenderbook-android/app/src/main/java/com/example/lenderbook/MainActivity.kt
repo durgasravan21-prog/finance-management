@@ -153,4 +153,9 @@ class WebAppInterface(private val activity: MainActivity) {
       activity.checkAndRequestPermissions()
     }
   }
+
+  @JavascriptInterface
+  fun getAppVersionCode(): Int {
+    return 2
+  }
 }
