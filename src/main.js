@@ -4105,6 +4105,12 @@ window.closeBorrowing = closeBorrowing;
 document.addEventListener('DOMContentLoaded', async () => {
   updateLenderNameUI();
   
+  // Show download link if not running in the new app wrapper
+  if (!window.AndroidInterface) {
+    const downloadBtn = document.getElementById('sidebar-download-apk');
+    if (downloadBtn) downloadBtn.style.display = 'flex';
+  }
+  
   // 1. Force version update check first
   const updateBlocked = await checkAppVersion();
   if (updateBlocked) return; // Completely block application initialization!
