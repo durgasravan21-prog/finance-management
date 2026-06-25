@@ -520,39 +520,85 @@ export async function syncOfflineData() {
   
   let syncCount = 0;
   try {
+    // 1. Fetch current borrowers and loans from Supabase to match existing records
+    const { data: dbBors, error: errB } = await supabase.from('borrowers').select('id, name, phone');
+    if (errB) throw errB;
+    
+    const { data: dbLoans, error: errL } = await supabase.from('loans').select('id, borrower_id, principal, start_date');
+    if (errL) throw errL;
+
     const idMapB = {};
+    
+    // 2. Sync Borrowers
     for (const b of localB) {
-      const { id, ...dbBorrower } = mapBorrowerToDb(b);
-      const { data, error } = await supabase.from('borrowers').insert([dbBorrower]).select();
-      if (error) throw error;
-      if (data && data[0]) {
-        idMapB[b.id] = data[0].id;
-        syncCount++;
+      // Check if borrower already exists in DB by phone
+      const existing = dbBors.find(x => x.phone === b.phone);
+      if (existing) {
+        idMapB[b.id] = existing.id;
+      } else {
+        const { id, ...dbBorrower } = mapBorrowerToDb(b);
+        const { data, error } = await supabase.from('borrowers').insert([dbBorrower]).select();
+        if (error) throw error;
+        if (data && data[0]) {
+          idMapB[b.id] = data[0].id;
+          syncCount++;
+          dbBors.push({ id: data[0].id, name: data[0].name, phone: data[0].phone });
+        }
       }
     }
     
     const idMapL = {};
+    
+    // 3. Sync Loans
     for (const l of localL) {
+      let resolvedBorrowerId = l.borrowerId;
       if (idMapB[l.borrowerId]) {
-        l.borrowerId = idMapB[l.borrowerId];
+        resolvedBorrowerId = idMapB[l.borrowerId];
+      } else {
+        // Fallback: If borrower wasn't in localB but exists in DB
+        const localBorObj = localB.find(x => x.id === l.borrowerId);
+        if (localBorObj) {
+          const matched = dbBors.find(x => x.phone === localBorObj.phone);
+          if (matched) resolvedBorrowerId = matched.id;
+        }
       }
-      const { id, ...dbLoan } = mapLoanToDb(l);
-      const { data, error } = await supabase.from('loans').insert([dbLoan]).select();
-      if (error) throw error;
-      if (data && data[0]) {
-        idMapL[l.id] = data[0].id;
-        syncCount++;
+      
+      l.borrowerId = resolvedBorrowerId;
+      
+      // Check if this loan already exists in DB (same borrower, principal, and start date)
+      const existingLoan = dbLoans.find(x => x.borrower_id === resolvedBorrowerId && parseFloat(x.principal) === parseFloat(l.principal) && x.start_date === l.startDate);
+      if (existingLoan) {
+        idMapL[l.id] = existingLoan.id;
+      } else {
+        const { id, ...dbLoan } = mapLoanToDb(l);
+        const { data, error } = await supabase.from('loans').insert([dbLoan]).select();
+        if (error) throw error;
+        if (data && data[0]) {
+          idMapL[l.id] = data[0].id;
+          syncCount++;
+          dbLoans.push({ id: data[0].id, borrower_id: resolvedBorrowerId, principal: data[0].principal, start_date: data[0].start_date });
+        }
       }
     }
     
+    // 4. Sync Repayments
+    const { data: dbReps, error: errR } = await supabase.from('repayments').select('receipt');
+    if (errR) throw errR;
+    const dbReceipts = new Set(dbReps.map(x => x.receipt));
+
     for (const r of localR) {
       if (idMapL[r.loanId]) r.loanId = idMapL[r.loanId];
       if (idMapB[r.borrowerId]) r.borrowerId = idMapB[r.borrowerId];
       
+      if (dbReceipts.has(r.receipt)) {
+        continue; // Skip already synced repayments
+      }
+
       const { id, ...dbRepayment } = mapRepaymentToDb(r);
       const { error } = await supabase.from('repayments').insert([dbRepayment]);
       if (error) throw error;
       syncCount++;
+      dbReceipts.add(r.receipt);
     }
     
     localStorage.removeItem('lb_borrowers');
