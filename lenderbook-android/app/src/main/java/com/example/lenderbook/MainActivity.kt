@@ -72,7 +72,11 @@ class MainActivity : ComponentActivity() {
     }
 
     val filter = IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION)
-    registerReceiver(smsReceiver, filter, RECEIVER_EXPORTED)
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+      registerReceiver(smsReceiver, filter, RECEIVER_EXPORTED)
+    } else {
+      registerReceiver(smsReceiver, filter)
+    }
   }
 
   override fun onDestroy() {
