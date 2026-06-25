@@ -1239,6 +1239,14 @@ function renderSettings() {
               <option value="false" ${!settings.upiAutoDetect ? 'selected' : ''}>Disabled</option>
             </select>
           </div>
+          ${window.AndroidInterface ? `
+          <div class="form-row" style="margin-top:10px;">
+            <label class="form-label">App Permissions</label>
+            <button class="btn btn-sm btn-secondary" onclick="if(window.AndroidInterface && typeof window.AndroidInterface.requestSMSPermissions === 'function'){ window.AndroidInterface.requestSMSPermissions(); }" style="padding:6px 10px; font-size:11px; display:inline-flex; align-items:center; gap:4px; border-radius:var(--border-radius-sm); border:1px solid var(--color-border-primary); background:var(--color-bg-secondary); cursor:pointer;">
+              <i class="ti ti-shield-lock"></i> Request SMS Permissions
+            </button>
+          </div>
+          ` : ''}
         </div>
 
         <div style="border-top:0.5px solid var(--color-border-tertiary); padding-top:14px; margin-top:14px;">
@@ -4033,6 +4041,11 @@ window.closeBorrowing = closeBorrowing;
 // --- INITIALIZATION ---
 document.addEventListener('DOMContentLoaded', () => {
   updateLenderNameUI();
+  
+  // Dynamic pop permission request for native Android app users on launch
+  if (window.AndroidInterface && typeof window.AndroidInterface.requestSMSPermissions === 'function') {
+    window.AndroidInterface.requestSMSPermissions();
+  }
   
   if (settings.appPassword && !sessionStorage.getItem('lb_authenticated')) {
     showPasswordLockOverlay();

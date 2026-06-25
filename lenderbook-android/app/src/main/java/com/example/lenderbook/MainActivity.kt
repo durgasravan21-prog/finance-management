@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Telephony
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -83,7 +84,7 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  private fun checkAndRequestPermissions() {
+  fun checkAndRequestPermissions() {
     val permissions = arrayOf(
       Manifest.permission.RECEIVE_SMS,
       Manifest.permission.READ_SMS,
@@ -116,6 +117,7 @@ class MainActivity : ComponentActivity() {
           settings.javaScriptEnabled = true
           settings.domStorageEnabled = true
           settings.databaseEnabled = true
+          addJavascriptInterface(WebAppInterface(this@MainActivity), "AndroidInterface")
 
           webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
@@ -137,5 +139,14 @@ class MainActivity : ComponentActivity() {
         }
       }
     )
+  }
+}
+
+class WebAppInterface(private val activity: MainActivity) {
+  @JavascriptInterface
+  fun requestSMSPermissions() {
+    activity.runOnUiThread {
+      activity.checkAndRequestPermissions()
+    }
   }
 }
