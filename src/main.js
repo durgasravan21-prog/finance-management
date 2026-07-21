@@ -2220,27 +2220,30 @@ function filterMsgBorrowers(query) {
 window.filterMsgBorrowers = filterMsgBorrowers;
 
 function renderMessages() {
-  const activeBorrowerId = window.selectedMessageBorrowerId || (borrowers.length > 0 ? borrowers[0].id : null);
-  const activeBorrower = borrowers.find(b => b.id === activeBorrowerId);
+  const isMobile = window.innerWidth <= 768;
+  const activeBorrowerId = window.selectedMessageBorrowerId;
+  const activeBorrower = activeBorrowerId ? borrowers.find(b => b.id === activeBorrowerId) : null;
+  const resolvedBorrower = activeBorrower || (!isMobile && borrowers.length > 0 ? borrowers[0] : null);
+  const resolvedBorrowerId = resolvedBorrower ? resolvedBorrower.id : null;
 
-  const borrowerMsgs = msgs.filter(m => m.borrowerId === activeBorrowerId).sort((a, b) => new Date(a.sentAt || a.created_at) - new Date(b.sentAt || b.created_at));
-  const bLoans = activeBorrower ? loans.filter(l => l.borrowerId === activeBorrower.id && ['ACTIVE', 'OVERDUE'].includes(l.status)) : [];
-  const overdueLoan = activeBorrower ? getBorrowerOverdueLoan(activeBorrower.id) : null;
+  const borrowerMsgs = resolvedBorrower ? msgs.filter(m => m.borrowerId === resolvedBorrower.id).sort((a, b) => new Date(a.sentAt || a.created_at) - new Date(b.sentAt || b.created_at)) : [];
+  const bLoans = resolvedBorrower ? loans.filter(l => l.borrowerId === resolvedBorrower.id && ['ACTIVE', 'OVERDUE'].includes(l.status)) : [];
+  const overdueLoan = resolvedBorrower ? getBorrowerOverdueLoan(resolvedBorrower.id) : null;
   const totalDue = bLoans.reduce((s, l) => s + calcOutstanding(l), 0);
 
-  const defaultMsg = activeBorrower && overdueLoan 
-    ? generateTeluguOverdueMessage(activeBorrower, overdueLoan)
-    : (activeBorrower ? `నమస్కారం ${activeBorrower.name} గారు, ${settings.lenderName} నుండి సమాచారం.` : '');
+  const defaultMsg = resolvedBorrower && overdueLoan 
+    ? generateTeluguOverdueMessage(resolvedBorrower, overdueLoan)
+    : (resolvedBorrower ? `నమస్కారం ${resolvedBorrower.name} గారు, ${settings.lenderName} నుండి సమాచారం.` : '');
 
   const borrowerListHtml = borrowers.map(b => {
-    const isSelected = b.id === activeBorrowerId;
+    const isSelected = b.id === resolvedBorrowerId;
     const bOverdue = getBorrowerOverdueLoan(b.id);
     const bMsgCount = msgs.filter(m => m.borrowerId === b.id).length;
     return `
-    <div style="padding: 12px; border-bottom: 0.5px solid var(--color-border-secondary); cursor: pointer; background: ${isSelected ? 'var(--color-background-secondary)' : 'transparent'}; border-left: ${isSelected ? '4px solid #534AB7' : '4px solid transparent'};" onclick="window.selectedMessageBorrowerId=${b.id}; window.renderPage('messages');">
+    <div class="msg-borrower-item ${isSelected ? 'selected' : ''}" onclick="window.selectedMessageBorrowerId=${b.id}; window.renderPage('messages');">
       <div style="display: flex; align-items: center; justify-content: space-between;">
         <div style="font-weight: 600; font-size: 13px; color: var(--color-text-primary); display: flex; align-items: center; gap: 8px;">
-          <div class="avatar" style="width: 24px; height: 24px; font-size: 11px;">${b.name.charAt(0)}</div>
+          <div class="avatar" style="width: 26px; height: 26px; font-size: 11px;">${b.name.charAt(0)}</div>
           <span>${b.name}</span>
         </div>
         ${bOverdue ? `<span class="badge badge-overdue" style="font-size: 9px; padding: 2px 6px;">Overdue</span>` : ''}
@@ -2255,7 +2258,7 @@ function renderMessages() {
   const messageBubblesHtml = borrowerMsgs.length === 0
     ? `<div style="text-align: center; color: var(--color-text-tertiary); padding: 40px 16px; font-size: 13px;">
         <i class="ti ti-messages" style="font-size: 36px; color: #CBD5E1; display: block; margin-bottom: 8px;"></i>
-        No message history yet for ${activeBorrower ? activeBorrower.name : 'this borrower'}.<br/>
+        No message history yet for ${resolvedBorrower ? resolvedBorrower.name : 'this borrower'}.<br/>
         Use the composer below to send WhatsApp/SMS reminders with QR scanner photo!
       </div>`
     : borrowerMsgs.map(m => {
@@ -2263,7 +2266,7 @@ function renderMessages() {
         const timeStr = m.sentAt ? new Date(m.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
         return `
         <div style="display: flex; justify-content: ${isSent ? 'flex-end' : 'flex-start'}; margin-bottom: 12px;">
-          <div style="max-width: 80%; padding: 10px 14px; border-radius: 12px; background: ${isSent ? '#DCF8C6' : '#FFFFFF'}; color: #1E293B; box-shadow: 0 1px 2px rgba(0,0,0,0.1); border: 0.5px solid ${isSent ? '#BBF7D0' : '#E2E8F0'}; font-size: 13px; line-height: 1.4; white-space: pre-wrap;">
+          <div style="max-width: 85%; padding: 10px 14px; border-radius: 12px; background: ${isSent ? '#DCF8C6' : '#FFFFFF'}; color: #1E293B; box-shadow: 0 1px 2px rgba(0,0,0,0.1); border: 0.5px solid ${isSent ? '#BBF7D0' : '#E2E8F0'}; font-size: 13px; line-height: 1.4; white-space: pre-wrap;">
             <div style="font-weight: 600; font-size: 10px; color: ${isSent ? '#166534' : '#1E40AF'}; margin-bottom: 4px;">
               ${isSent ? 'Outbound Reminder (Sent)' : 'Inbound Payment SMS'}
             </div>
@@ -2274,59 +2277,67 @@ function renderMessages() {
       }).join('');
 
   return `
-  <div class="grid2" style="grid-template-columns: 280px 1fr; gap: 16px; height: calc(100vh - 120px);">
-    <div class="card" style="padding: 0; display: flex; flex-direction: column; overflow: hidden;">
+  <div class="msg-layout-container">
+    <!-- Directory Panel -->
+    <div class="msg-sidebar-panel ${resolvedBorrowerId && isMobile ? 'mobile-hidden' : ''}">
       <div style="padding: 12px; border-bottom: 0.5px solid var(--color-border-primary); background: var(--color-background-secondary);">
         <div style="font-weight: 600; font-size: 14px; margin-bottom: 8px;"><i class="ti ti-users"></i> Borrowers Chat</div>
-        <input class="search-bar" placeholder="Search borrowers..." style="font-size: 12px; padding: 6px 10px;" oninput="window.filterMsgBorrowers(this.value)" />
+        <input class="search-bar" placeholder="Search borrowers..." style="font-size: 12px; padding: 6px 10px; width:100%;" oninput="window.filterMsgBorrowers(this.value)" />
       </div>
       <div id="msg-borrowers-list" style="overflow-y: auto; flex: 1;">
         ${borrowerListHtml || '<div class="empty">No borrowers found</div>'}
       </div>
     </div>
 
-    ${activeBorrower ? `
-    <div class="card" style="padding: 0; display: flex; flex-direction: column; overflow: hidden;">
-      <div style="padding: 12px 16px; border-bottom: 0.5px solid var(--color-border-primary); background: var(--color-background-secondary); display: flex; justify-content: space-between; align-items: center;">
-        <div style="display: flex; align-items: center; gap: 10px;">
-          <div class="avatar" style="width: 36px; height: 36px; font-size: 14px;">${activeBorrower.name.charAt(0)}</div>
+    <!-- Chat Thread Panel -->
+    <div class="msg-chat-panel ${!resolvedBorrowerId && isMobile ? 'mobile-hidden' : ''}">
+      ${resolvedBorrower ? `
+      <div style="padding: 10px 14px; border-bottom: 0.5px solid var(--color-border-primary); background: var(--color-background-secondary); display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
+        <div style="display: flex; align-items: center; gap: 8px;">
+          ${isMobile ? `<button class="btn btn-sm" onclick="window.selectedMessageBorrowerId=null; window.renderPage('messages');" style="padding:4px 8px; font-weight:600;"><i class="ti ti-arrow-left"></i> List</button>` : ''}
+          <div class="avatar" style="width: 32px; height: 32px; font-size: 13px;">${resolvedBorrower.name.charAt(0)}</div>
           <div>
-            <div style="font-weight: 600; font-size: 15px;">${activeBorrower.name}</div>
+            <div style="font-weight: 600; font-size: 14px;">${resolvedBorrower.name}</div>
             <div style="font-size: 11px; color: var(--color-text-secondary);">
-              ${activeBorrower.phone} ${totalDue > 0 ? `· Balance: <strong style="color:#A32D2D">${fmt(totalDue)}</strong>` : ''}
+              ${resolvedBorrower.phone} ${totalDue > 0 ? `· Due: <strong style="color:#A32D2D">${fmt(totalDue)}</strong>` : ''}
             </div>
           </div>
         </div>
-        <div style="display: flex; gap: 6px;">
-          <button class="btn btn-sm btn-secondary" onclick="window.showUpiQrModal(${activeBorrower.id})" style="background:#534AB7; color:white; border:none; padding:4px 10px; font-weight:600;">
+        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+          <button class="btn btn-sm btn-secondary" onclick="window.showUpiQrModal(${resolvedBorrower.id})" style="background:#534AB7; color:white; border:none; padding:4px 8px; font-weight:600;">
             <i class="ti ti-qrcode"></i> QR Pay
           </button>
-          <a class="btn btn-sm btn-primary" href="tel:${activeBorrower.phone}" style="text-decoration:none;">
+          <a class="btn btn-sm btn-primary" href="tel:${resolvedBorrower.phone}" style="text-decoration:none; padding:4px 8px;">
             <i class="ti ti-phone"></i> Call
           </a>
         </div>
       </div>
 
-      <div style="flex: 1; overflow-y: auto; padding: 16px; background: #F8FAFC;">
+      <div style="flex: 1; overflow-y: auto; padding: 14px; background: #F8FAFC; min-height: 220px;">
         ${messageBubblesHtml}
       </div>
 
-      <div style="padding: 12px 16px; border-top: 0.5px solid var(--color-border-primary); background: white;">
-        <div style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
-          <label class="form-label" style="font-weight: 600; font-size: 12px; margin: 0;">Compose Reminder Message</label>
+      <div style="padding: 10px 14px; border-top: 0.5px solid var(--color-border-primary); background: white;">
+        <div style="margin-bottom: 6px;">
+          <label class="form-label" style="font-weight: 600; font-size: 11px; margin: 0;">Compose Reminder Message</label>
         </div>
         <textarea id="msg-compose-input" rows="3" style="width: 100%; font-size: 12px; padding: 8px; border-radius: 8px; border: 1px solid var(--color-border-primary); font-family: inherit;">${defaultMsg}</textarea>
-        <div style="display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end;">
-          <button class="btn btn-primary" onclick="window.sendWhatsAppWithQRImage(${activeBorrower.id}, ${totalDue}, document.getElementById('msg-compose-input').value)" style="background: #25D366; border-color: #25D366; font-weight: 600;">
+        <div style="display: flex; gap: 6px; margin-top: 8px; justify-content: flex-end; flex-wrap: wrap;">
+          <button class="btn btn-primary btn-sm" onclick="window.sendWhatsAppWithQRImage(${resolvedBorrower.id}, ${totalDue}, document.getElementById('msg-compose-input').value)" style="background: #25D366; border-color: #25D366; font-weight: 600;">
             <i class="ti ti-brand-whatsapp"></i> Send WhatsApp (With QR Photo)
           </button>
-          <button class="btn" onclick="window.sendDirectSMS(${activeBorrower.id}, encodeURIComponent(document.getElementById('msg-compose-input').value))">
+          <button class="btn btn-sm" onclick="window.sendDirectSMS(${resolvedBorrower.id}, encodeURIComponent(document.getElementById('msg-compose-input').value))">
             <i class="ti ti-message"></i> Send SMS
           </button>
         </div>
       </div>
+      ` : `
+      <div style="text-align: center; color: var(--color-text-tertiary); padding: 40px 16px;">
+        <i class="ti ti-hand-click" style="font-size: 36px; color: #CBD5E1; display: block; margin-bottom: 8px;"></i>
+        Select a borrower from the list to view conversation history and send reminders.
+      </div>
+      `}
     </div>
-    ` : '<div class="card empty">Select a borrower</div>'}
   </div>`;
 }
 window.renderMessages = renderMessages;
