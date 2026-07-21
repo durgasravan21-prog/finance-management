@@ -701,16 +701,21 @@ ${qrScannerUrl}`;
 function generateTeluguOverdueMessage(borrower, loan) {
   const stats = getLoanStats(loan);
   const upiBlock = generateUpiPayBlock(stats.amountLeft, `Repayment-${borrower.name}`);
-  return `నమస్కారం ${borrower.name} గారు,
+  
+  let template = customTemplates.overdue || `నమస్కారం {BorrowerName} గారు,\n\n{LenderName} నుండి సమాచారం. మీ లోన్ బకాయి చెల్లింపు గడువు తేదీ ({DueDate}) ముగిసినది.\n\nబకాయి ఉన్న మొత్తం: {OutstandingBal}{UpiPaymentBlock}\n\nదయచేసి మీ బకాయిని వెంటనే చెల్లించగలరు.\n\nధన్యవాదాలు,\n{LenderName}`;
+  
+  if (!template.includes('{UpiPaymentBlock}')) {
+    template = template.trim() + `{UpiPaymentBlock}`;
+  }
 
-${settings.lenderName} నుండి సమాచారం. మీ లోన్ బకాయి చెల్లింపు గడువు తేదీ (${loan.dueDate}) ముగిసినది.
-
-బకాయి ఉన్న మొత్తం: ${fmt(stats.amountLeft)}${upiBlock}
-
-దయచేసి మీ బకాయిని వెంటనే చెల్లించగలరు.
-
-ధన్యవాదాలు,
-${settings.lenderName}`;
+  return template
+    .replace(/{BorrowerName}/g, borrower.name || '')
+    .replace(/{LenderName}/g, settings.lenderName || 'Ramaiah Finance')
+    .replace(/{DueDate}/g, loan.dueDate || '')
+    .replace(/{OutstandingBal}/g, fmt(stats.amountLeft))
+    .replace(/{Amount}/g, fmt(stats.amountLeft))
+    .replace(/{ReceiptNo}/g, `L-${loan.id}`)
+    .replace(/{UpiPaymentBlock}/g, upiBlock);
 }
 
 function sendDirectWhatsApp(borrowerId, encodedMsg) {
@@ -2610,6 +2615,13 @@ function saveSettings() {
   settings.fatherUpiId = (document.getElementById('s-fatherUpiId')?.value || '').trim();
   settings.upiAutoDetect = document.getElementById('s-upiAutoDetect')?.value === 'true';
   settings.appPassword = (document.getElementById('s-app-password')?.value || '').trim();
+  
+  // Save custom message templates
+  const overdueTpl = document.getElementById('s-template-overdue');
+  const receiptTpl = document.getElementById('s-template-receipt');
+  if (overdueTpl) customTemplates.overdue = overdueTpl.value.trim();
+  if (receiptTpl) customTemplates.receipt = receiptTpl.value.trim();
+  localStorage.setItem('lb_custom_templates', JSON.stringify(customTemplates));
   
   const dbUrlInput = document.getElementById('s-dbUrl');
   const dbKeyInput = document.getElementById('s-dbKey');
