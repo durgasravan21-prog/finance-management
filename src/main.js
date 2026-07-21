@@ -2106,6 +2106,231 @@ function updateReminderPreview(borrowerId) {
 }
 window.updateReminderPreview = updateReminderPreview;
 
+async function sendWhatsAppWithQRImage(borrowerId, amount = 0, textMsg = '') {
+  const b = borrowers.find(x => x.id === borrowerId);
+  if (!b) return;
+  const phone = b.phone ? b.phone.replace(/\D/g, '') : '';
+  const cleanPhone = phone.startsWith('91') ? phone : '91' + phone;
+
+  const upiId = settings.fatherUpiId || (settings.fatherPhone ? settings.fatherPhone.replace(/\D/g, '') + '@ybl' : '');
+  const lenderName = settings.lenderName || 'Ramaiah Finance';
+  const cleanAmt = Math.round(amount || 0);
+
+  let finalMsg = textMsg;
+  if (!finalMsg) {
+    const l = getBorrowerOverdueLoan(borrowerId) || loans.find(x => x.borrowerId === borrowerId && ['ACTIVE', 'OVERDUE'].includes(x.status));
+    finalMsg = l ? generateTeluguOverdueMessage(b, l) : `నమస్కారం ${b.name} గారు, ₹${cleanAmt} చెల్లించగలరు.`;
+  }
+
+  // 1. Try Web Share API with actual PNG image file (works on Android / mobile devices!)
+  if (upiId && cleanAmt > 0 && navigator.canShare) {
+    try {
+      const upiDeepLink = `upi://pay?pa=${upiId}&pn=${encodeURIComponent(lenderName)}&am=${cleanAmt}&cu=INR&tn=${encodeURIComponent('Repayment-' + b.name)}`;
+      const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&format=png&data=${encodeURIComponent(upiDeepLink)}`;
+      
+      const response = await fetch(qrImageUrl);
+      const blob = await response.blob();
+      const qrFile = new File([blob], `UPI-QR-${b.name}.png`, { type: 'image/png' });
+
+      if (navigator.canShare({ files: [qrFile] })) {
+        try {
+          await addMessage({ borrowerId: b.id, content: finalMsg, sentAt: new Date().toISOString(), direction: 'SENT' });
+        } catch (e) { console.error('Add message error:', e); }
+
+        await navigator.share({
+          files: [qrFile],
+          title: `UPI QR Scanner - ${fmt(cleanAmt)}`,
+          text: finalMsg
+        });
+        showToast('QR Code photo and payment message shared to WhatsApp! ✓');
+        return;
+      }
+    } catch (e) {
+      console.log('Web share failed or cancelled, falling back to WhatsApp window + clipboard:', e);
+    }
+  }
+
+  // 2. Desktop Fallback: Copy QR Image to Clipboard and open WhatsApp window
+  if (upiId && cleanAmt > 0) {
+    try {
+      const upiDeepLink = `upi://pay?pa=${upiId}&pn=${encodeURIComponent(lenderName)}&am=${cleanAmt}&cu=INR&tn=${encodeURIComponent('Repayment-' + b.name)}`;
+      const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&format=png&data=${encodeURIComponent(upiDeepLink)}`;
+      
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+        const dataUrl = canvas.toDataURL('image/png');
+        copyImageToClipboard(dataUrl);
+      };
+      img.src = qrImageUrl;
+    } catch (err) {
+      console.error('Copy QR image to clipboard error:', err);
+    }
+  }
+
+  try {
+    await addMessage({ borrowerId: b.id, content: finalMsg, sentAt: new Date().toISOString(), direction: 'SENT' });
+  } catch (e) { console.error('Add message error:', e); }
+
+  const whatsappUrl = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(finalMsg)}`;
+  window.open(whatsappUrl, '_blank');
+  closeModal();
+  showToast('Opening WhatsApp... QR photo copied! Press Paste (Ctrl+V) to attach image.', 6000);
+}
+window.sendWhatsAppWithQRImage = sendWhatsAppWithQRImage;
+
+let selectedMessageBorrowerId = null;
+window.selectedMessageBorrowerId = selectedMessageBorrowerId;
+
+function filterMsgBorrowers(query) {
+  const q = (query || '').toLowerCase().trim();
+  const listEl = document.getElementById('msg-borrowers-list');
+  if (!listEl) return;
+  
+  const filtered = borrowers.filter(b => b.name.toLowerCase().includes(q) || b.phone.includes(q));
+  const activeBorrowerId = window.selectedMessageBorrowerId || (borrowers.length > 0 ? borrowers[0].id : null);
+  
+  listEl.innerHTML = filtered.map(b => {
+    const isSelected = b.id === activeBorrowerId;
+    const bOverdue = getBorrowerOverdueLoan(b.id);
+    const bMsgCount = msgs.filter(m => m.borrowerId === b.id).length;
+    return `
+    <div style="padding: 12px; border-bottom: 0.5px solid var(--color-border-secondary); cursor: pointer; background: ${isSelected ? 'var(--color-background-secondary)' : 'transparent'}; border-left: ${isSelected ? '4px solid #534AB7' : '4px solid transparent'};" onclick="window.selectedMessageBorrowerId=${b.id}; window.renderPage('messages');">
+      <div style="display: flex; align-items: center; justify-content: space-between;">
+        <div style="font-weight: 600; font-size: 13px; color: var(--color-text-primary); display: flex; align-items: center; gap: 8px;">
+          <div class="avatar" style="width: 24px; height: 24px; font-size: 11px;">${b.name.charAt(0)}</div>
+          <span>${b.name}</span>
+        </div>
+        ${bOverdue ? `<span class="badge badge-overdue" style="font-size: 9px; padding: 2px 6px;">Overdue</span>` : ''}
+      </div>
+      <div style="font-size: 11px; color: var(--color-text-tertiary); margin-top: 4px; display: flex; justify-content: space-between;">
+        <span>${b.phone}</span>
+        <span>${bMsgCount} msgs</span>
+      </div>
+    </div>`;
+  }).join('') || '<div class="empty">No borrowers found</div>';
+}
+window.filterMsgBorrowers = filterMsgBorrowers;
+
+function renderMessages() {
+  const activeBorrowerId = window.selectedMessageBorrowerId || (borrowers.length > 0 ? borrowers[0].id : null);
+  const activeBorrower = borrowers.find(b => b.id === activeBorrowerId);
+
+  const borrowerMsgs = msgs.filter(m => m.borrowerId === activeBorrowerId).sort((a, b) => new Date(a.sentAt || a.created_at) - new Date(b.sentAt || b.created_at));
+  const bLoans = activeBorrower ? loans.filter(l => l.borrowerId === activeBorrower.id && ['ACTIVE', 'OVERDUE'].includes(l.status)) : [];
+  const overdueLoan = activeBorrower ? getBorrowerOverdueLoan(activeBorrower.id) : null;
+  const totalDue = bLoans.reduce((s, l) => s + calcOutstanding(l), 0);
+
+  const defaultMsg = activeBorrower && overdueLoan 
+    ? generateTeluguOverdueMessage(activeBorrower, overdueLoan)
+    : (activeBorrower ? `నమస్కారం ${activeBorrower.name} గారు, ${settings.lenderName} నుండి సమాచారం.` : '');
+
+  const borrowerListHtml = borrowers.map(b => {
+    const isSelected = b.id === activeBorrowerId;
+    const bOverdue = getBorrowerOverdueLoan(b.id);
+    const bMsgCount = msgs.filter(m => m.borrowerId === b.id).length;
+    return `
+    <div style="padding: 12px; border-bottom: 0.5px solid var(--color-border-secondary); cursor: pointer; background: ${isSelected ? 'var(--color-background-secondary)' : 'transparent'}; border-left: ${isSelected ? '4px solid #534AB7' : '4px solid transparent'};" onclick="window.selectedMessageBorrowerId=${b.id}; window.renderPage('messages');">
+      <div style="display: flex; align-items: center; justify-content: space-between;">
+        <div style="font-weight: 600; font-size: 13px; color: var(--color-text-primary); display: flex; align-items: center; gap: 8px;">
+          <div class="avatar" style="width: 24px; height: 24px; font-size: 11px;">${b.name.charAt(0)}</div>
+          <span>${b.name}</span>
+        </div>
+        ${bOverdue ? `<span class="badge badge-overdue" style="font-size: 9px; padding: 2px 6px;">Overdue</span>` : ''}
+      </div>
+      <div style="font-size: 11px; color: var(--color-text-tertiary); margin-top: 4px; display: flex; justify-content: space-between;">
+        <span>${b.phone}</span>
+        <span>${bMsgCount} msgs</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  const messageBubblesHtml = borrowerMsgs.length === 0
+    ? `<div style="text-align: center; color: var(--color-text-tertiary); padding: 40px 16px; font-size: 13px;">
+        <i class="ti ti-messages" style="font-size: 36px; color: #CBD5E1; display: block; margin-bottom: 8px;"></i>
+        No message history yet for ${activeBorrower ? activeBorrower.name : 'this borrower'}.<br/>
+        Use the composer below to send WhatsApp/SMS reminders with QR scanner photo!
+      </div>`
+    : borrowerMsgs.map(m => {
+        const isSent = m.direction === 'SENT';
+        const timeStr = m.sentAt ? new Date(m.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+        return `
+        <div style="display: flex; justify-content: ${isSent ? 'flex-end' : 'flex-start'}; margin-bottom: 12px;">
+          <div style="max-width: 80%; padding: 10px 14px; border-radius: 12px; background: ${isSent ? '#DCF8C6' : '#FFFFFF'}; color: #1E293B; box-shadow: 0 1px 2px rgba(0,0,0,0.1); border: 0.5px solid ${isSent ? '#BBF7D0' : '#E2E8F0'}; font-size: 13px; line-height: 1.4; white-space: pre-wrap;">
+            <div style="font-weight: 600; font-size: 10px; color: ${isSent ? '#166534' : '#1E40AF'}; margin-bottom: 4px;">
+              ${isSent ? 'Outbound Reminder (Sent)' : 'Inbound Payment SMS'}
+            </div>
+            ${m.content}
+            <div style="font-size: 9px; color: #64748B; text-align: right; margin-top: 4px;">${timeStr}</div>
+          </div>
+        </div>`;
+      }).join('');
+
+  return `
+  <div class="grid2" style="grid-template-columns: 280px 1fr; gap: 16px; height: calc(100vh - 120px);">
+    <div class="card" style="padding: 0; display: flex; flex-direction: column; overflow: hidden;">
+      <div style="padding: 12px; border-bottom: 0.5px solid var(--color-border-primary); background: var(--color-background-secondary);">
+        <div style="font-weight: 600; font-size: 14px; margin-bottom: 8px;"><i class="ti ti-users"></i> Borrowers Chat</div>
+        <input class="search-bar" placeholder="Search borrowers..." style="font-size: 12px; padding: 6px 10px;" oninput="window.filterMsgBorrowers(this.value)" />
+      </div>
+      <div id="msg-borrowers-list" style="overflow-y: auto; flex: 1;">
+        ${borrowerListHtml || '<div class="empty">No borrowers found</div>'}
+      </div>
+    </div>
+
+    ${activeBorrower ? `
+    <div class="card" style="padding: 0; display: flex; flex-direction: column; overflow: hidden;">
+      <div style="padding: 12px 16px; border-bottom: 0.5px solid var(--color-border-primary); background: var(--color-background-secondary); display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div class="avatar" style="width: 36px; height: 36px; font-size: 14px;">${activeBorrower.name.charAt(0)}</div>
+          <div>
+            <div style="font-weight: 600; font-size: 15px;">${activeBorrower.name}</div>
+            <div style="font-size: 11px; color: var(--color-text-secondary);">
+              ${activeBorrower.phone} ${totalDue > 0 ? `· Balance: <strong style="color:#A32D2D">${fmt(totalDue)}</strong>` : ''}
+            </div>
+          </div>
+        </div>
+        <div style="display: flex; gap: 6px;">
+          <button class="btn btn-sm btn-secondary" onclick="window.showUpiQrModal(${activeBorrower.id})" style="background:#534AB7; color:white; border:none; padding:4px 10px; font-weight:600;">
+            <i class="ti ti-qrcode"></i> QR Pay
+          </button>
+          <a class="btn btn-sm btn-primary" href="tel:${activeBorrower.phone}" style="text-decoration:none;">
+            <i class="ti ti-phone"></i> Call
+          </a>
+        </div>
+      </div>
+
+      <div style="flex: 1; overflow-y: auto; padding: 16px; background: #F8FAFC;">
+        ${messageBubblesHtml}
+      </div>
+
+      <div style="padding: 12px 16px; border-top: 0.5px solid var(--color-border-primary); background: white;">
+        <div style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+          <label class="form-label" style="font-weight: 600; font-size: 12px; margin: 0;">Compose Reminder Message</label>
+        </div>
+        <textarea id="msg-compose-input" rows="3" style="width: 100%; font-size: 12px; padding: 8px; border-radius: 8px; border: 1px solid var(--color-border-primary); font-family: inherit;">${defaultMsg}</textarea>
+        <div style="display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end;">
+          <button class="btn btn-primary" onclick="window.sendWhatsAppWithQRImage(${activeBorrower.id}, ${totalDue}, document.getElementById('msg-compose-input').value)" style="background: #25D366; border-color: #25D366; font-weight: 600;">
+            <i class="ti ti-brand-whatsapp"></i> Send WhatsApp (With QR Photo)
+          </button>
+          <button class="btn" onclick="window.sendDirectSMS(${activeBorrower.id}, encodeURIComponent(document.getElementById('msg-compose-input').value))">
+            <i class="ti ti-message"></i> Send SMS
+          </button>
+        </div>
+      </div>
+    </div>
+    ` : '<div class="card empty">Select a borrower</div>'}
+  </div>`;
+}
+window.renderMessages = renderMessages;
+
 function showUpiQrModal(borrowerId, customAmount = 0) {
   const b = borrowers.find(x => x.id === borrowerId);
   if (!b) return;
@@ -2152,8 +2377,8 @@ function showUpiQrModal(borrowerId, customAmount = 0) {
 
         <div style="display: flex; flex-direction: column; gap: 8px; max-width: 320px; margin: 0 auto;">
           ${upiId ? `
-            <button class="btn btn-primary" onclick="window.sendDirectWhatsApp(${borrowerId}, encodeURIComponent(\`${overdueMsg.replace(/`/g, '\\`').replace(/'/g, "\\'")}\`))" style="justify-content: center; background: #25D366; border-color: #25D366; font-weight: 600;">
-              <i class="ti ti-brand-whatsapp"></i> Send QR & Link on WhatsApp
+            <button class="btn btn-primary" onclick="window.sendWhatsAppWithQRImage(${borrowerId}, ${cleanAmt})" style="justify-content: center; background: #25D366; border-color: #25D366; font-weight: 600;">
+              <i class="ti ti-brand-whatsapp"></i> Send QR Photo & Link on WhatsApp
             </button>
             <button class="btn btn-secondary" onclick="navigator.clipboard.writeText('${upiDeepLink}'); showToast('UPI Payment Link copied!');" style="justify-content: center; font-weight: 500;">
               <i class="ti ti-copy"></i> Copy Direct UPI Link
