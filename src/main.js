@@ -4806,195 +4806,225 @@ async function runSmartAgentScan() {
   resetDailyTracking();
   let actionCount = 0;
 
-  // ─── 1. Process Unprocessed Incoming Payment SMS & Auto-Queue Receipts ───
-  if (agentConfig.autoProcessSms) {
-    try {
-      const smsRows = await getUnprocessedSms();
-      for (const row of smsRows) {
-        const parsed = parseBankSMS(row.body || row.sms_text);
-        if (parsed && ((parsed.isCredit && parsed.creditAmount > 0) || (parsed.parsed && parsed.amount > 0))) {
-          const creditAmt = parsed.creditAmount || parsed.amount || 0;
-          const vpa = parsed.senderVPA || '';
-          const matchedBorrower = matchVPAToBorrower(vpa, row.sender, borrowers);
-          if (matchedBorrower) {
-            const activeLoan = getBorrowerOverdueLoan(matchedBorrower.id) || loans.find(l => l.borrowerId === matchedBorrower.id && ['ACTIVE', 'OVERDUE'].includes(l.status));
-            if (activeLoan) {
-              const receiptNo = `AGT-${Date.now().toString(36).toUpperCase()}`;
-              const rep = {
-                loanId: activeLoan.id,
-                borrowerId: matchedBorrower.id,
-                amount: creditAmt,
-                paidOn: new Date().toISOString().split('T')[0],
-                date: new Date().toISOString().split('T')[0],
-                mode: 'UPI',
-                method: 'UPI',
-                receipt: receiptNo,
-                notes: `Auto-recorded by Smart Agent via SMS (${row.sender})`,
-                created_at: new Date().toISOString()
-              };
-              await addRepayment(rep);
-              repayments.unshift(rep);
-              
-              const newStats = getLoanStats(activeLoan);
-              if (newStats.amountLeft <= 0) {
-                await updateLoanStatus(activeLoan.id, 'CLOSED');
-                activeLoan.status = 'CLOSED';
+  try {
+    // ─── 1. Process Unprocessed Incoming Payment SMS & Auto-Queue Receipts ───
+    if (agentConfig.autoProcessSms) {
+      try {
+        const smsRows = await getUnprocessedSms();
+        if (smsRows && smsRows.length > 0) {
+          const borrowerListWithVpa = borrowers.map(b => ({ ...b, vpa: b.upiVpa || b.vpa || '' }));
+          for (const row of smsRows) {
+            try {
+              const smsText = row.sms_text || row.body || '';
+              if (!smsText) {
+                await markSmsProcessed(row.id);
+                continue;
               }
               
-              await markSmsProcessed(row.id);
+              const parsed = parseBankSMS(smsText);
+              if (parsed && (parsed.parsed || parsed.amount > 0)) {
+                const creditAmt = parsed.amount || 0;
+                const vpa = parsed.senderVPA || '';
+                
+                // matchVPAToBorrower(vpa, borrowersArray)
+                const matchedBorrower = matchVPAToBorrower(vpa, borrowerListWithVpa);
+                
+                if (matchedBorrower) {
+                  const realBorrower = borrowers.find(x => x.id === matchedBorrower.id);
+                  if (realBorrower) {
+                    const activeLoan = getBorrowerOverdueLoan(realBorrower.id) || loans.find(l => l.borrowerId === realBorrower.id && ['ACTIVE', 'OVERDUE'].includes(l.status));
+                    if (activeLoan) {
+                      const receiptNo = `AGT-${Date.now().toString(36).toUpperCase()}`;
+                      const rep = {
+                        loanId: activeLoan.id,
+                        borrowerId: realBorrower.id,
+                        amount: creditAmt,
+                        paidOn: new Date().toISOString().split('T')[0],
+                        date: new Date().toISOString().split('T')[0],
+                        mode: 'UPI',
+                        method: 'UPI',
+                        receipt: receiptNo,
+                        notes: `Auto-recorded by Smart Agent via SMS (${row.sender || 'Bank'})`,
+                        created_at: new Date().toISOString()
+                      };
+                      await addRepayment(rep);
+                      repayments.unshift(rep);
+                      
+                      const newStats = getLoanStats(activeLoan);
+                      if (newStats.amountLeft <= 0) {
+                        await updateLoanStatus(activeLoan.id, 'CLOSED');
+                        activeLoan.status = 'CLOSED';
+                      }
+                      
+                      await markSmsProcessed(row.id);
 
-              logAgentActivity(
-                '💰 Payment Auto-Recorded',
-                `₹${creditAmt.toLocaleString('en-IN')} from ${matchedBorrower.name} via SMS. Receipt: ${receiptNo}. Balance: ₹${newStats.amountLeft.toLocaleString('en-IN')}`,
-                'success'
-              );
-              triggerNotification(
-                `💰 ₹${creditAmt.toLocaleString('en-IN')} from ${matchedBorrower.name}`,
-                `Payment auto-recorded. Balance: ₹${newStats.amountLeft.toLocaleString('en-IN')}`
-              );
-              
-              // ─── AUTO-QUEUE PAYMENT RECEIPT FOR WHATSAPP ───
-              if (agentConfig.autoSendReceipts) {
-                const receiptImg = generateReceiptImage(
-                  matchedBorrower.name,
-                  matchedBorrower.phone || '',
-                  creditAmt,
-                  new Date().toISOString().split('T')[0],
-                  'UPI',
-                  receiptNo,
-                  `Auto-recorded via SMS`,
-                  newStats.amountLeft
-                );
-                
-                const lenderName = settings.lenderName || 'LenderBook';
-                const receiptMsg = `🧾 *${lenderName} — Payment Receipt*\n\nDear ${matchedBorrower.name},\n\n✅ Payment of ₹${creditAmt.toLocaleString('en-IN')} received successfully!\n\n📋 Receipt No: ${receiptNo}\n📅 Date: ${new Date().toLocaleDateString('en-IN')}\n💳 Method: UPI\n💰 Remaining Balance: ₹${newStats.amountLeft.toLocaleString('en-IN')}${newStats.amountLeft <= 0 ? '\n\n🎉 LOAN FULLY PAID! Congratulations!' : ''}\n\nThank you for your payment! 🙏\n— ${lenderName}`;
-                
-                const queued = queueAgentAction('PAYMENT_RECEIPT', matchedBorrower.id, activeLoan.id, {
-                  message: receiptMsg,
-                  amount: creditAmt,
-                  receiptNo,
-                  receiptImage: receiptImg,
-                  borrowerName: matchedBorrower.name,
-                  borrowerPhone: matchedBorrower.phone || '',
-                  balance: newStats.amountLeft
-                });
-                
-                if (queued) {
-                  logAgentActivity('🧾 Receipt Queued', `Payment receipt for ₹${creditAmt.toLocaleString('en-IN')} queued for ${matchedBorrower.name}. Tap Send to share via WhatsApp.`, 'receipt');
-                  triggerNotification('🧾 Receipt Ready to Send', `Tap to send ₹${creditAmt.toLocaleString('en-IN')} receipt to ${matchedBorrower.name}`);
+                      logAgentActivity(
+                        '💰 Payment Auto-Recorded',
+                        `₹${creditAmt.toLocaleString('en-IN')} from ${realBorrower.name} via SMS. Receipt: ${receiptNo}. Balance: ₹${newStats.amountLeft.toLocaleString('en-IN')}`,
+                        'success'
+                      );
+                      triggerNotification(
+                        `💰 ₹${creditAmt.toLocaleString('en-IN')} from ${realBorrower.name}`,
+                        `Payment auto-recorded. Balance: ₹${newStats.amountLeft.toLocaleString('en-IN')}`
+                      );
+                      
+                      // ─── AUTO-QUEUE PAYMENT RECEIPT FOR WHATSAPP ───
+                      if (agentConfig.autoSendReceipts) {
+                        const receiptImg = generateReceiptImage(
+                          realBorrower.name,
+                          realBorrower.phone || '',
+                          creditAmt,
+                          new Date().toISOString().split('T')[0],
+                          'UPI',
+                          receiptNo,
+                          `Auto-recorded via SMS`,
+                          newStats.amountLeft
+                        );
+                        
+                        const lenderName = settings.lenderName || 'LenderBook';
+                        const receiptMsg = `🧾 *${lenderName} — Payment Receipt*\n\nDear ${realBorrower.name},\n\n✅ Payment of ₹${creditAmt.toLocaleString('en-IN')} received successfully!\n\n📋 Receipt No: ${receiptNo}\n📅 Date: ${new Date().toLocaleDateString('en-IN')}\n💳 Method: UPI\n💰 Remaining Balance: ₹${newStats.amountLeft.toLocaleString('en-IN')}${newStats.amountLeft <= 0 ? '\n\n🎉 LOAN FULLY PAID! Congratulations!' : ''}\n\nThank you for your payment! 🙏\n— ${lenderName}`;
+                        
+                        const queued = queueAgentAction('PAYMENT_RECEIPT', realBorrower.id, activeLoan.id, {
+                          message: receiptMsg,
+                          amount: creditAmt,
+                          receiptNo,
+                          receiptImage: receiptImg,
+                          borrowerName: realBorrower.name,
+                          borrowerPhone: realBorrower.phone || '',
+                          balance: newStats.amountLeft
+                        });
+                        
+                        if (queued) {
+                          logAgentActivity('🧾 Receipt Queued', `Payment receipt for ₹${creditAmt.toLocaleString('en-IN')} queued for ${realBorrower.name}.`, 'receipt');
+                        }
+                      }
+                      
+                      actionCount++;
+                    }
+                  }
                 }
               }
-              
-              actionCount++;
+              // Mark processed so it doesn't stay in queue forever
+              await markSmsProcessed(row.id);
+            } catch (smsErr) {
+              console.error('Error processing SMS row:', smsErr);
+              await markSmsProcessed(row.id).catch(() => {});
             }
           }
         }
-      }
-    } catch (e) {
-      console.error('Agent SMS scan error:', e);
-    }
-  }
-
-  // ─── 2. Check & Flag Overdue Loans + Auto-Queue WhatsApp Reminders ───
-  if (agentConfig.autoFlagOverdue) {
-    const today = new Date().toISOString().split('T')[0];
-    for (const l of loans) {
-      if (l.status === 'ACTIVE' && l.dueDate < today && calcOutstanding(l) > 0) {
-        l.status = 'OVERDUE';
-        try {
-          await updateLoanStatus(l.id, 'OVERDUE');
-        } catch (e) { console.error('Update status error:', e); }
-        
-        const b = borrowers.find(x => x.id === l.borrowerId);
-        const bName = b ? b.name : `Borrower #${l.borrowerId}`;
-        
-        logAgentActivity(
-          '⚠️ Overdue Loan Flagged',
-          `Loan L-${l.id} for ${bName} is overdue. Outstanding: ₹${calcOutstanding(l).toLocaleString('en-IN')}`,
-          'warning'
-        );
-        triggerNotification(
-          `⚠️ Overdue: ${bName}`,
-          `Loan L-${l.id} overdue. ₹${calcOutstanding(l).toLocaleString('en-IN')} pending.`
-        );
-        actionCount++;
+      } catch (e) {
+        console.error('Agent SMS scan error:', e);
       }
     }
-  }
 
-  // ─── 3. Auto-Queue Overdue Reminder WhatsApp Messages ───
-  if (agentConfig.autoSendReminders) {
-    const overdueLoans = loans.filter(l => ['OVERDUE', 'DEFAULTED'].includes(l.status) && calcOutstanding(l) > 0);
-    for (const l of overdueLoans) {
-      const b = borrowers.find(x => x.id === l.borrowerId);
-      if (!b || !b.phone) continue;
-      
-      const stats = getLoanStats(l);
-      const msg = generateTeluguOverdueMessage(b, l);
-      
-      const queued = queueAgentAction('OVERDUE_REMINDER', b.id, l.id, {
-        message: msg,
-        amount: stats.amountLeft,
-        borrowerName: b.name,
-        borrowerPhone: b.phone,
-        dueDate: l.dueDate
-      });
-      
-      if (queued) {
-        logAgentActivity('📩 Overdue Reminder Queued', `Reminder for ${b.name} (₹${stats.amountLeft.toLocaleString('en-IN')}) queued for WhatsApp. Tap Send to deliver.`, 'warning');
-        actionCount++;
-      }
-    }
-  }
-
-  // ─── 4. Auto-Queue Upcoming Payment Reminders (Pre-Due) ───
-  if (agentConfig.autoUpcomingReminders) {
-    const today = new Date();
-    const daysBefore = agentConfig.reminderDaysBeforeDue || 2;
-    
-    for (const l of loans) {
-      if (l.status !== 'ACTIVE' || !l.dueDate) continue;
-      const outstanding = calcOutstanding(l);
-      if (outstanding <= 0) continue;
-      
-      const dueDate = new Date(l.dueDate);
-      const diffDays = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
-      
-      if (diffDays >= 0 && diffDays <= daysBefore) {
-        const b = borrowers.find(x => x.id === l.borrowerId);
-        if (!b || !b.phone) continue;
-        
-        const stats = getLoanStats(l);
-        const lenderName = settings.lenderName || 'LenderBook';
-        const upiBlock = generateUpiPayBlock(stats.amountLeft);
-        const daysText = diffDays === 0 ? 'ఈ రోజు' : (diffDays === 1 ? 'రేపు' : `${diffDays} రోజుల్లో`);
-        
-        const reminderMsg = `నమస్కారం ${b.name} గారు 🙏\n\n${lenderName} నుండి సమాచారం.\n\nమీ loan చెల్లింపు ${daysText} (${l.dueDate}) due అవుతుంది.\n\nబకాయి మొత్తం: ₹${stats.amountLeft.toLocaleString('en-IN')}${upiBlock}\n\nసమయానికి చెల్లించగలరు.\nధన్యవాదాలు 🙏\n${lenderName}`;
-        
-        const queued = queueAgentAction('UPCOMING_REMINDER', b.id, l.id, {
-          message: reminderMsg,
-          amount: stats.amountLeft,
-          borrowerName: b.name,
-          borrowerPhone: b.phone,
-          dueDate: l.dueDate,
-          daysLeft: diffDays
-        });
-        
-        if (queued) {
-          logAgentActivity('📅 Upcoming Due Reminder Queued', `Payment due in ${diffDays} day(s) for ${b.name} (₹${stats.amountLeft.toLocaleString('en-IN')}). Tap Send.`, 'info');
+    // ─── 2. Check & Flag Overdue Loans + Auto-Queue WhatsApp Reminders ───
+    if (agentConfig.autoFlagOverdue) {
+      const today = new Date().toISOString().split('T')[0];
+      for (const l of loans) {
+        if (l.status === 'ACTIVE' && l.dueDate && l.dueDate < today && calcOutstanding(l) > 0) {
+          l.status = 'OVERDUE';
+          try {
+            await updateLoanStatus(l.id, 'OVERDUE');
+          } catch (e) { console.error('Update status error:', e); }
+          
+          const b = borrowers.find(x => x.id === l.borrowerId);
+          const bName = b ? b.name : `Borrower #${l.borrowerId}`;
+          
+          logAgentActivity(
+            '⚠️ Overdue Loan Flagged',
+            `Loan L-${l.id} for ${bName} is overdue. Outstanding: ₹${calcOutstanding(l).toLocaleString('en-IN')}`,
+            'warning'
+          );
+          triggerNotification(
+            `⚠️ Overdue: ${bName}`,
+            `Loan L-${l.id} overdue. ₹${calcOutstanding(l).toLocaleString('en-IN')} pending.`
+          );
           actionCount++;
         }
       }
     }
-  }
 
-  // ─── 5. Periodic Clean Scan Log ───
-  if (actionCount === 0 && (agentLogs.length === 0 || new Date() - new Date(agentLogs[0].timestamp) > 300000)) {
-    logAgentActivity('🔍 System Scan Clean', `Scanned ${loans.length} loans, ${borrowers.length} borrowers. Queue: ${agentQueue.filter(q=>q.status==='PENDING').length} pending actions.`, 'info');
+    // ─── 3. Auto-Queue Overdue Reminder WhatsApp Messages ───
+    if (agentConfig.autoSendReminders) {
+      const overdueLoans = loans.filter(l => ['OVERDUE', 'DEFAULTED'].includes(l.status) && calcOutstanding(l) > 0);
+      for (const l of overdueLoans) {
+        const b = borrowers.find(x => x.id === l.borrowerId);
+        if (!b || !b.phone) continue;
+        
+        const stats = getLoanStats(l);
+        const msg = generateTeluguOverdueMessage(b, l);
+        
+        const queued = queueAgentAction('OVERDUE_REMINDER', b.id, l.id, {
+          message: msg,
+          amount: stats.amountLeft,
+          borrowerName: b.name,
+          borrowerPhone: b.phone,
+          dueDate: l.dueDate
+        });
+        
+        if (queued) {
+          logAgentActivity('📩 Overdue Reminder Queued', `Reminder for ${b.name} (₹${stats.amountLeft.toLocaleString('en-IN')}) queued for WhatsApp.`, 'warning');
+          actionCount++;
+        }
+      }
+    }
+
+    // ─── 4. Auto-Queue Upcoming Payment Reminders (Pre-Due) ───
+    if (agentConfig.autoUpcomingReminders) {
+      const today = new Date();
+      const daysBefore = agentConfig.reminderDaysBeforeDue || 2;
+      
+      for (const l of loans) {
+        if (l.status !== 'ACTIVE' || !l.dueDate) continue;
+        const outstanding = calcOutstanding(l);
+        if (outstanding <= 0) continue;
+        
+        const dueDate = new Date(l.dueDate);
+        const diffDays = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
+        
+        if (diffDays >= 0 && diffDays <= daysBefore) {
+          const b = borrowers.find(x => x.id === l.borrowerId);
+          if (!b || !b.phone) continue;
+          
+          const stats = getLoanStats(l);
+          const lenderName = settings.lenderName || 'LenderBook';
+          const upiBlock = generateUpiPayBlock(stats.amountLeft);
+          const daysText = diffDays === 0 ? 'ఈ రోజు' : (diffDays === 1 ? 'రేపు' : `${diffDays} రోజుల్లో`);
+          
+          const reminderMsg = `నమస్కారం ${b.name} గారు 🙏\n\n${lenderName} నుండి సమాచారం.\n\nమీ loan చెల్లింపు ${daysText} (${l.dueDate}) due అవుతుంది.\n\nబకాయి మొత్తం: ₹${stats.amountLeft.toLocaleString('en-IN')}${upiBlock}\n\nసమయానికి చెల్లించగలరు.\nధన్యవాదాలు 🙏\n${lenderName}`;
+          
+          const queued = queueAgentAction('UPCOMING_REMINDER', b.id, l.id, {
+            message: reminderMsg,
+            amount: stats.amountLeft,
+            borrowerName: b.name,
+            borrowerPhone: b.phone,
+            dueDate: l.dueDate,
+            daysLeft: diffDays
+          });
+          
+          if (queued) {
+            logAgentActivity('📅 Upcoming Due Reminder Queued', `Payment due in ${diffDays} day(s) for ${b.name} (₹${stats.amountLeft.toLocaleString('en-IN')}).`, 'info');
+            actionCount++;
+          }
+        }
+      }
+    }
+
+    // ─── 5. Periodic Clean Scan Log ───
+    if (actionCount === 0 && (agentLogs.length === 0 || new Date() - new Date(agentLogs[0].timestamp) > 300000)) {
+      logAgentActivity('🔍 System Scan Clean', `Scanned ${loans.length} loans, ${borrowers.length} borrowers. Queue: ${agentQueue.filter(q=>q.status==='PENDING').length} pending actions.`, 'info');
+    }
+  } catch (err) {
+    console.error('Error during runSmartAgentScan:', err);
+    logAgentActivity('⚠️ Scan Error', `Agent encountered an issue: ${err.message}`, 'warning');
   }
 
   updateAgentTopbarBadge();
   updateAgentQueueBadge();
+
+  if (typeof currentPage !== 'undefined' && currentPage === 'agent') {
+    renderPage('agent');
+  }
 }
 window.runSmartAgentScan = runSmartAgentScan;
 
