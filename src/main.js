@@ -332,48 +332,96 @@ function t(k) {
 
 // --- SMS PROCESSING HELPERS ---
 async function processIncomingSmsRow(row) {
-  const result = parseBankSMS(row.sms_text);
-  if (result.parsed && result.amount) {
-    let matchedBorrowerId = null;
-    if (result.senderVPA) {
-      const matched = matchVPAToBorrower(result.senderVPA, borrowers.map(b => ({ ...b, vpa: b.upiVpa })));
-      if (matched) matchedBorrowerId = matched.id;
-    }
+  try {
+    console.log('[SMS-PARSER] Processing SMS:', row.sms_text?.substring(0, 80));
+    const result = parseBankSMS(row.sms_text);
+    console.log('[SMS-PARSER] Parse result:', JSON.stringify({ parsed: result.parsed, amount: result.amount, vpa: result.senderVPA, date: result.date, bank: result.bankTag }));
 
-    await addUpiPayment({
-      borrowerId: matchedBorrowerId,
-      amount: result.amount,
-      upiVpa: result.senderVPA || 'unknown',
-      bankSmsText: row.sms_text,
-      status: 'PENDING'
-    });
-    
-    const bName = matchedBorrowerId ? borrowers.find(b => b.id === matchedBorrowerId)?.name : null;
-    if (bName) {
-      showToast(`Auto-detected SMS payment: ${fmt(result.amount)} from ${bName} ✓`);
+    if (result.parsed && result.amount) {
+      // Default date to today if not extracted
+      const paymentDate = result.date || new Date().toISOString().slice(0, 10);
+
+      // Try to match VPA to a borrower
+      let matchedBorrowerId = null;
+      let matchedBorrower = null;
+      if (result.senderVPA) {
+        const matched = matchVPAToBorrower(result.senderVPA, borrowers.map(b => ({ ...b, vpa: b.upiVpa })));
+        if (matched) {
+          matchedBorrowerId = matched.id;
+          matchedBorrower = matched;
+        }
+      }
+
+      // Always record the UPI auto-payment as PENDING or CONFIRMED
+      const upiStatus = matchedBorrowerId ? 'CONFIRMED' : 'PENDING';
+      await addUpiPayment({
+        borrowerId: matchedBorrowerId,
+        amount: result.amount,
+        upiVpa: result.senderVPA || 'unknown',
+        bankSmsText: row.sms_text,
+        status: upiStatus
+      });
+
+      // If borrower matched, auto-create a real repayment against their active loan
+      if (matchedBorrowerId) {
+        const activeLoan = loans.find(l => l.borrowerId === matchedBorrowerId && (l.status === 'ACTIVE' || l.status === 'OVERDUE'));
+        if (activeLoan) {
+          const receiptNo = `SMS-${Date.now()}-${Math.random().toString(36).substr(2, 4).toUpperCase()}`;
+          await addRepayment({
+            loanId: activeLoan.id,
+            borrowerId: matchedBorrowerId,
+            amount: result.amount,
+            paidOn: paymentDate,
+            method: 'UPI',
+            notes: `Auto-detected via SMS (${result.bankTag || 'bank'}). VPA: ${result.senderVPA || 'N/A'}. Ref: ${result.upiRefNo || 'N/A'}`,
+            receipt: receiptNo
+          });
+          console.log(`[SMS-PARSER] Auto-created repayment: ${fmt(result.amount)} for ${matchedBorrower.name} on loan #${activeLoan.id}`);
+          showToast(`✅ Auto-recorded: ${fmt(result.amount)} from ${matchedBorrower.name} (via SMS)`);
+        } else {
+          console.log(`[SMS-PARSER] Borrower matched but no active loan found for ${matchedBorrower.name}`);
+          showToast(`SMS payment detected: ${fmt(result.amount)} from ${matchedBorrower.name} (no active loan)`);
+        }
+      } else {
+        console.log(`[SMS-PARSER] No borrower matched for VPA: ${result.senderVPA}`);
+        showToast(`SMS payment detected: ${fmt(result.amount)} (unmatched sender: ${result.senderVPA || 'unknown'})`);
+      }
     } else {
-      showToast(`Auto-detected SMS payment: ${fmt(result.amount)} (Unknown sender)`);
+      console.log('[SMS-PARSER] SMS not parsed as credit:', row.sms_text?.substring(0, 60));
     }
+  } catch (err) {
+    console.error('[SMS-PARSER] Error processing SMS row:', err);
   }
-  await markSmsProcessed(row.id);
+  // Always mark as processed, even on error, to prevent infinite reprocessing
+  try {
+    await markSmsProcessed(row.id);
+  } catch (markErr) {
+    console.error('[SMS-PARSER] Error marking SMS processed:', markErr);
+  }
 }
 
 async function processUnprocessedSms() {
   try {
     const rawList = await getUnprocessedSms();
     if (rawList && rawList.length > 0) {
+      console.log(`[SMS-PARSER] Found ${rawList.length} unprocessed SMS to process`);
       for (const sms of rawList) {
         await processIncomingSmsRow(sms);
       }
+      // Refresh data after batch processing
+      await refreshData();
+      if (typeof renderPage === 'function' && typeof currentPage !== 'undefined') {
+        renderPage(currentPage);
+      }
     }
   } catch (e) {
-    console.error('Error processing raw SMS:', e);
+    console.error('[SMS-PARSER] Error processing raw SMS backlog:', e);
   }
 }
 
 // --- ANDROID WEBVIEW SMS BRIDGE ---
 window.handleAndroidIncomingSMS = async function(sender, body) {
-  console.log("handleAndroidIncomingSMS called from native app wrapper:", sender, body);
+  console.log("[SMS-BRIDGE] handleAndroidIncomingSMS called:", sender, body?.substring(0, 80));
   try {
     const newSms = await addRawSms({ smsText: body, sender: sender });
     await processIncomingSmsRow(newSms);
@@ -382,7 +430,7 @@ window.handleAndroidIncomingSMS = async function(sender, body) {
       renderPage(currentPage);
     }
   } catch (err) {
-    console.error("Error in handleAndroidIncomingSMS:", err);
+    console.error("[SMS-BRIDGE] Error in handleAndroidIncomingSMS:", err);
   }
 };
 
@@ -4174,6 +4222,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     refreshData().then(() => {
       nav('dashboard');
       initRealtimeSms();
+      processUnprocessedSms();
     });
   }
   

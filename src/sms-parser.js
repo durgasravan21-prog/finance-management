@@ -21,6 +21,21 @@ function parseAmount(raw) {
 }
 
 /**
+ * Clean a VPA string: strip trailing dots, commas, parentheses,
+ * and extract phone@handle from patterns like "NAME-phone@handle".
+ */
+function cleanVPA(vpa) {
+  if (!vpa) return null;
+  let cleaned = vpa.replace(/[.,;:()\[\]{}]+$/g, '').trim();
+  // Handle IOB-style "NAME-phone@handle" — extract phone@handle
+  const phoneAtHandle = cleaned.match(/(\d{10,})@([\w.\-]+)/);
+  if (phoneAtHandle) {
+    cleaned = phoneAtHandle[1] + '@' + phoneAtHandle[2];
+  }
+  return cleaned || null;
+}
+
+/**
  * Normalise various Indian‐bank date strings → "YYYY-MM-DD".
  * Accepted inputs (examples):
  *   22-Jun-25, 22-Jun-2025, 22-06-25, 22-06-2025,
@@ -136,7 +151,7 @@ const bankParsers = [
 
       // VPA
       m = sms.match(/VPA\s+/i) ? sms.match(new RegExp(`VPA\\s+${VPA.source}`, 'i')) : null;
-      if (m) r.senderVPA = m[1];
+      if (m) r.senderVPA = cleanVPA(m[1]);
 
       // UPI Ref
       m = sms.match(UPIREF);
@@ -146,7 +161,7 @@ const bankParsers = [
       m = sms.match(new RegExp(`Avl\\.?\\s*Bal\\.?\\s*${CUR.source}${AMT.source}`, 'i'));
       if (m) r.availableBalance = parseAmount(m[1]);
 
-      r.parsed = !!(r.amount && r.senderVPA);
+      r.parsed = !!(r.amount);
       return r;
     },
   },
@@ -176,7 +191,7 @@ const bankParsers = [
 
       // VPA
       m = sms.match(new RegExp(`VPA\\s+${VPA.source}`, 'i'));
-      if (m) r.senderVPA = m[1];
+      if (m) r.senderVPA = cleanVPA(m[1]);
 
       // Available Balance
       m = sms.match(new RegExp(`Avl\\.?\\s*Bal\\.?\\s*:?\\s*${CUR.source}${AMT.source}`, 'i'));
@@ -186,7 +201,7 @@ const bankParsers = [
       m = sms.match(UPIREF);
       if (m) r.upiRefNo = m[1];
 
-      r.parsed = !!(r.amount && r.senderVPA);
+      r.parsed = !!(r.amount);
       return r;
     },
   },
@@ -216,7 +231,7 @@ const bankParsers = [
 
       // VPA  – UPI/vpa/ref format
       m = sms.match(new RegExp(`UPI\\s*/\\s*${VPA.source}`, 'i'));
-      if (m) r.senderVPA = m[1];
+      if (m) r.senderVPA = cleanVPA(m[1]);
 
       // UPI Ref (third segment after UPI/vpa/)
       m = sms.match(/UPI\/[\w.\-]+@[\w.\-]+\/(\d{10,16})/i);
@@ -226,7 +241,7 @@ const bankParsers = [
       m = sms.match(new RegExp(`Avl\\.?\\s*bal\\.?\\s*${CUR.source}${AMT.source}`, 'i'));
       if (m) r.availableBalance = parseAmount(m[1]);
 
-      r.parsed = !!(r.amount && r.senderVPA);
+      r.parsed = !!(r.amount);
       return r;
     },
   },
@@ -256,13 +271,13 @@ const bankParsers = [
 
       // VPA  – UPI-vpa
       m = sms.match(new RegExp(`UPI[-–]\\s*${VPA.source}`, 'i'));
-      if (m) r.senderVPA = m[1];
+      if (m) r.senderVPA = cleanVPA(m[1]);
 
       // Balance
       m = sms.match(new RegExp(`Bal\\.?\\s*:?\\s*${CUR.source}${AMT.source}`, 'i'));
       if (m) r.availableBalance = parseAmount(m[1]);
 
-      r.parsed = !!(r.amount && r.senderVPA);
+      r.parsed = !!(r.amount);
       return r;
     },
   },
@@ -296,9 +311,9 @@ const bankParsers = [
 
       // VPA  – "VPA:venkatesh@okaxis" or "VPA: venkatesh@okaxis"
       m = sms.match(new RegExp(`VPA\\s*:?\\s*${VPA.source}`, 'i'));
-      if (m) r.senderVPA = m[1];
+      if (m) r.senderVPA = cleanVPA(m[1]);
 
-      r.parsed = !!(r.amount && r.senderVPA);
+      r.parsed = !!(r.amount);
       return r;
     },
   },
@@ -328,7 +343,7 @@ const bankParsers = [
 
       // VPA
       m = sms.match(new RegExp(`(?:from\\s+)?VPA\\s+${VPA.source}`, 'i'));
-      if (m) r.senderVPA = m[1];
+      if (m) r.senderVPA = cleanVPA(m[1]);
 
       // UPI Ref
       m = sms.match(UPIREF);
@@ -338,7 +353,7 @@ const bankParsers = [
       m = sms.match(new RegExp(`(?:Avl\\.?\\s*)?Bal\\.?\\s*:?\\s*${CUR.source}${AMT.source}`, 'i'));
       if (m) r.availableBalance = parseAmount(m[1]);
 
-      r.parsed = !!(r.amount && r.senderVPA);
+      r.parsed = !!(r.amount);
       return r;
     },
   },
@@ -369,17 +384,17 @@ const bankParsers = [
       // VPA
       m = sms.match(/(?:from|by)\s+.*?([^@\n\s]+)@([\w.\-]+)/i);
       if (m) {
-        r.senderVPA = m[1] + '@' + m[2];
+        r.senderVPA = cleanVPA(m[1] + '@' + m[2]);
       } else {
         m = sms.match(new RegExp(`(?:from|by)?\\s*${VPA.source}`, 'i'));
-        if (m) r.senderVPA = m[1];
+        if (m) r.senderVPA = cleanVPA(m[1]);
       }
 
       // UPI Ref
       m = sms.match(UPIREF);
       if (m) r.upiRefNo = m[1];
 
-      r.parsed = !!(r.amount && r.senderVPA);
+      r.parsed = !!(r.amount);
       return r;
     },
   },
@@ -413,7 +428,7 @@ function genericParse(sms) {
   // VPA – multiple patterns
   m = sms.match(/(?:from|by)\s+.*?([^@\n\s]+)@([\w.\-]+)/i);
   if (m) {
-    r.senderVPA = m[1] + '@' + m[2];
+    r.senderVPA = cleanVPA(m[1] + '@' + m[2]);
   } else {
     m = sms.match(new RegExp(`(?:VPA|UPI)\\s*[:/\\-]?\\s*${VPA.source}`, 'i'));
     if (!m) m = sms.match(new RegExp(`(?:from|by)\\s+${VPA.source}`, 'i'));
@@ -421,7 +436,7 @@ function genericParse(sms) {
     if (!m) m = sms.match(/([\w.\-]+@(?:ok|pay|upi|ybl|apl|ibl|axl|sbi|icici|paytm)[\w.\-]*)/i);
     // Absolute fallback: match any email/vpa-like pattern containing @ (e.g. @ptyes)
     if (!m) m = sms.match(/([\w.\-]+@[\w.\-]+)/);
-    if (m) r.senderVPA = m[1];
+    if (m) r.senderVPA = cleanVPA(m[1]);
   }
 
   // UPI Ref
@@ -432,7 +447,7 @@ function genericParse(sms) {
   m = sms.match(new RegExp(`(?:Avl\\.?\\s*)?Bal(?:ance)?\\.?\\s*:?\\s*${CUR.source}${AMT.source}`, 'i'));
   if (m) r.availableBalance = parseAmount(m[1]);
 
-  r.parsed = !!(r.amount && r.senderVPA);
+  r.parsed = !!(r.amount);
   return r;
 }
 
