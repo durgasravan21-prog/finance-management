@@ -670,32 +670,14 @@ function getBorrowerOverdueLoan(borrowerId) {
   return null;
 }
 
-function generateUpiPayBlock(amount, note = 'LenderBook Repayment') {
+function generateUpiPayBlock(amount, note = 'Repayment') {
   const upiId = settings.fatherUpiId || (settings.fatherPhone ? settings.fatherPhone.replace(/\D/g, '') + '@ybl' : '');
   const cleanAmt = Math.round(amount || 0);
-  if (!cleanAmt || cleanAmt <= 0) return '';
-  
-  const lenderName = settings.lenderName || 'Ramaiah Finance';
-  
-  if (!upiId) {
-    return `\n\n💳 *UPI Payment:* (Configure Father's UPI ID in Settings to auto-generate direct GPay/PhonePe link & QR scanner)`;
-  }
-  
-  // Direct tap-to-pay link for GPay, PhonePe, Paytm, BHIM, etc.
-  const upiDeepLink = `upi://pay?pa=${upiId}&pn=${encodeURIComponent(lenderName)}&am=${cleanAmt}&cu=INR&tn=${encodeURIComponent(note)}`;
-  
-  // Instant QR Scanner web link (opens QR code image directly in browser)
-  const qrScannerUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(upiDeepLink)}`;
+  if (!cleanAmt || cleanAmt <= 0 || !upiId) return '';
 
-  return `\n\n💳 *Pay via UPI (GPay / PhonePe / Paytm / BHIM):*
-• UPI ID: ${upiId}
-• Amount: ${fmt(cleanAmt)}
+  const upiDeepLink = `upi://pay?pa=${upiId}&am=${cleanAmt}`;
 
-👇 *Tap link to Pay Directly:*
-${upiDeepLink}
-
-🖼️ *Scan QR Code Link:*
-${qrScannerUrl}`;
+  return `\n\n💳 *UPI ID:* ${upiId}\n👇 *Tap to Pay:*\n${upiDeepLink}`;
 }
 
 function generateTeluguOverdueMessage(borrower, loan) {
@@ -2125,7 +2107,7 @@ async function sendWhatsAppWithQRImage(borrowerId, amount = 0, textMsg = '') {
   // 1. Try Web Share API with actual PNG image file (works on Android / mobile devices!)
   if (upiId && cleanAmt > 0 && navigator.canShare) {
     try {
-      const upiDeepLink = `upi://pay?pa=${upiId}&pn=${encodeURIComponent(lenderName)}&am=${cleanAmt}&cu=INR&tn=${encodeURIComponent('Repayment-' + b.name)}`;
+      const upiDeepLink = `upi://pay?pa=${upiId}&am=${cleanAmt}`;
       const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&format=png&data=${encodeURIComponent(upiDeepLink)}`;
       
       const response = await fetch(qrImageUrl);
@@ -2153,7 +2135,7 @@ async function sendWhatsAppWithQRImage(borrowerId, amount = 0, textMsg = '') {
   // 2. Desktop Fallback: Copy QR Image to Clipboard and open WhatsApp window
   if (upiId && cleanAmt > 0) {
     try {
-      const upiDeepLink = `upi://pay?pa=${upiId}&pn=${encodeURIComponent(lenderName)}&am=${cleanAmt}&cu=INR&tn=${encodeURIComponent('Repayment-' + b.name)}`;
+      const upiDeepLink = `upi://pay?pa=${upiId}&am=${cleanAmt}`;
       const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&format=png&data=${encodeURIComponent(upiDeepLink)}`;
       
       const img = new Image();
@@ -2352,7 +2334,7 @@ function showUpiQrModal(borrowerId, customAmount = 0) {
   const upiId = settings.fatherUpiId || (settings.fatherPhone ? settings.fatherPhone.replace(/\D/g, '') + '@ybl' : '');
   const lenderName = settings.lenderName || 'Ramaiah Finance';
   const cleanAmt = Math.round(payAmt);
-  const upiDeepLink = upiId ? `upi://pay?pa=${upiId}&pn=${encodeURIComponent(lenderName)}&am=${cleanAmt}&cu=INR&tn=${encodeURIComponent('Repayment-' + b.name)}` : '';
+  const upiDeepLink = upiId ? `upi://pay?pa=${upiId}&am=${cleanAmt}` : '';
   const qrUrl = upiDeepLink ? `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(upiDeepLink)}` : '';
 
   const overdueMsg = l ? generateTeluguOverdueMessage(b, l) : `Pay ${fmt(cleanAmt)} via UPI link: ${upiDeepLink}`;
