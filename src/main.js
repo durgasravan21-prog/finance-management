@@ -37,6 +37,7 @@ const T = {
     loans: 'Loans',
     repayments: 'Repayments',
     messages: 'Messages',
+    agent: 'Smart Agent',
     settings: 'Settings',
     overview: 'Overview',
     manage: 'Manage',
@@ -645,6 +646,7 @@ function renderPage(page) {
   else if (page === 'loans') el.innerHTML = renderLoans();
   else if (page === 'repayments') el.innerHTML = renderRepayments();
   else if (page === 'messages') el.innerHTML = renderMessages();
+  else if (page === 'agent') el.innerHTML = renderAgent();
   else if (page === 'calllist') el.innerHTML = renderCallList();
   else if (page === 'settings') el.innerHTML = renderSettings();
   else if (page === 'borrowings') el.innerHTML = renderBorrowings();
@@ -4503,6 +4505,353 @@ window.saveBorrowingRepayment = saveBorrowingRepayment;
 window.deleteBorrowingRepayment = deleteBorrowingRepayment;
 window.closeBorrowing = closeBorrowing;
 
+// ==========================================
+// 🤖 LENDERBOOK SMART AGENT ENGINE
+// ==========================================
+let agentConfig = JSON.parse(localStorage.getItem('lb_agent_config') || '{"enabled":true,"autoProcessSms":true,"autoFlagOverdue":true,"pushNotifications":true,"scanIntervalSec":30}');
+let agentLogs = JSON.parse(localStorage.getItem('lb_agent_logs') || '[]');
+let agentLastScan = null;
+let agentTimerId = null;
+window.agentConfig = agentConfig;
+window.agentLogs = agentLogs;
+
+function saveAgentConfig() {
+  localStorage.setItem('lb_agent_config', JSON.stringify(agentConfig));
+  updateAgentTopbarBadge();
+}
+window.saveAgentConfig = saveAgentConfig;
+
+function logAgentActivity(action, details, type = 'info') {
+  const logEntry = {
+    id: Date.now() + Math.random().toString(36).substr(2, 4),
+    timestamp: new Date().toISOString(),
+    action,
+    details,
+    type // 'success', 'warning', 'info'
+  };
+  agentLogs.unshift(logEntry);
+  if (agentLogs.length > 50) agentLogs = agentLogs.slice(0, 50);
+  localStorage.setItem('lb_agent_logs', JSON.stringify(agentLogs));
+  
+  if (typeof currentPage !== 'undefined' && currentPage === 'agent') {
+    renderPage('agent');
+  }
+}
+window.logAgentActivity = logAgentActivity;
+
+function updateAgentTopbarBadge() {
+  const badge = document.getElementById('topbar-agent-status');
+  if (!badge) return;
+  if (agentConfig.enabled) {
+    badge.style.background = '#E1F5EE';
+    badge.style.color = '#0F6E56';
+    badge.style.borderColor = '#A7F3D0';
+    badge.innerHTML = `<span class="pulse-dot" style="background:#10B981;"></span> <span>Agent Active</span>`;
+  } else {
+    badge.style.background = '#FEF2F2';
+    badge.style.color = '#991B1B';
+    badge.style.borderColor = '#FCA5A5';
+    badge.innerHTML = `<span class="pulse-dot" style="background:#EF4444;"></span> <span>Agent Paused</span>`;
+  }
+}
+window.updateAgentTopbarBadge = updateAgentTopbarBadge;
+
+async function requestNotificationPermission() {
+  if (!('Notification' in window)) {
+    showToast('Browser notifications are not supported on this device.');
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  if (perm === 'granted') {
+    agentConfig.pushNotifications = true;
+    saveAgentConfig();
+    showToast('Notifications enabled! Agent will alert you of payments & overdues. ✓');
+    try {
+      new Notification('🤖 Smart Agent Active', {
+        body: 'LenderBook Smart Agent is actively monitoring payments & notifications.',
+        icon: '/favicon.ico'
+      });
+    } catch (e) {}
+  } else {
+    agentConfig.pushNotifications = false;
+    saveAgentConfig();
+    showToast('Notification permission denied.');
+  }
+}
+window.requestNotificationPermission = requestNotificationPermission;
+
+function triggerNotification(title, body) {
+  if (agentConfig.pushNotifications && 'Notification' in window && Notification.permission === 'granted') {
+    try {
+      new Notification(title, { body, icon: '/favicon.ico' });
+    } catch (e) {
+      console.error('Notification trigger error:', e);
+    }
+  }
+}
+
+async function runSmartAgentScan() {
+  if (!agentConfig.enabled) return;
+  
+  agentLastScan = new Date();
+  let actionCount = 0;
+
+  // 1. Process Unprocessed Incoming Payment SMS
+  if (agentConfig.autoProcessSms) {
+    try {
+      const smsRows = await getUnprocessedSms();
+      for (const row of smsRows) {
+        const parsed = parseBankSMS(row.body);
+        if (parsed.isCredit && parsed.creditAmount > 0) {
+          const matchedBorrower = matchVPAToBorrower(parsed.senderVPA, row.sender, borrowers);
+          if (matchedBorrower) {
+            const activeLoan = getBorrowerOverdueLoan(matchedBorrower.id) || loans.find(l => l.borrowerId === matchedBorrower.id && ['ACTIVE', 'OVERDUE'].includes(l.status));
+            if (activeLoan) {
+              const rep = {
+                loanId: activeLoan.id,
+                borrowerId: matchedBorrower.id,
+                amount: parsed.creditAmount,
+                date: new Date().toISOString().split('T')[0],
+                mode: 'UPI',
+                notes: `Auto-recorded by Smart Agent via SMS (${row.sender})`,
+                created_at: new Date().toISOString()
+              };
+              await addRepayment(rep);
+              repayments.unshift(rep);
+              
+              const newStats = getLoanStats(activeLoan);
+              if (newStats.amountLeft <= 0) {
+                await updateLoanStatus(activeLoan.id, 'CLOSED');
+                activeLoan.status = 'CLOSED';
+              }
+              
+              await markSmsProcessed(row.id);
+
+              logAgentActivity(
+                '💰 Payment Auto-Recorded',
+                `Received ₹${parsed.creditAmount.toLocaleString('en-IN')} from ${matchedBorrower.name} via ${row.sender} SMS`,
+                'success'
+              );
+              triggerNotification(
+                `💰 Payment Auto-Recorded (₹${parsed.creditAmount.toLocaleString('en-IN')})`,
+                `Received from ${matchedBorrower.name} via SMS. Balance updated.`
+              );
+              actionCount++;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Agent SMS scan error:', e);
+    }
+  }
+
+  // 2. Check & Flag Overdue Loans
+  if (agentConfig.autoFlagOverdue) {
+    const today = new Date().toISOString().split('T')[0];
+    for (const l of loans) {
+      if (l.status === 'ACTIVE' && l.dueDate < today && calcOutstanding(l) > 0) {
+        l.status = 'OVERDUE';
+        try {
+          await updateLoanStatus(l.id, 'OVERDUE');
+        } catch (e) { console.error('Update status error:', e); }
+        
+        const b = borrowers.find(x => x.id === l.borrowerId);
+        const bName = b ? b.name : `Borrower #${l.borrowerId}`;
+        
+        logAgentActivity(
+          '⚠️ Overdue Loan Flagged',
+          `Loan L-${l.id} for ${bName} is overdue. Outstanding balance: ₹${calcOutstanding(l).toLocaleString('en-IN')}`,
+          'warning'
+        );
+        triggerNotification(
+          `⚠️ Overdue Loan Alert (${bName})`,
+          `Loan L-${l.id} is overdue with balance ₹${calcOutstanding(l).toLocaleString('en-IN')}`
+        );
+        actionCount++;
+      }
+    }
+  }
+
+  if (actionCount === 0 && (agentLogs.length === 0 || new Date() - new Date(agentLogs[0].timestamp) > 300000)) {
+    logAgentActivity('🔍 System Scan Clean', `Monitored ${loans.length} loans and ${borrowers.length} borrowers. All payments up to date.`, 'info');
+  }
+
+  updateAgentTopbarBadge();
+}
+window.runSmartAgentScan = runSmartAgentScan;
+
+function initSmartAgent() {
+  updateAgentTopbarBadge();
+  runSmartAgentScan();
+  
+  if (agentTimerId) clearInterval(agentTimerId);
+  agentTimerId = setInterval(() => {
+    runSmartAgentScan();
+  }, (agentConfig.scanIntervalSec || 30) * 1000);
+}
+window.initSmartAgent = initSmartAgent;
+
+// Render Smart Agent Control Panel & Log Stream
+function renderAgent() {
+  const activeCount = loans.filter(l => l.status === 'ACTIVE').length;
+  const overdueCount = loans.filter(l => l.status === 'OVERDUE').length;
+  const totalMonitored = borrowers.length;
+  const lastScanStr = agentLastScan ? agentLastScan.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Pending scan...';
+
+  const logsHtml = agentLogs.length === 0
+    ? `<div class="empty"><i class="ti ti-robot" style="font-size:36px; display:block; margin-bottom:8px; color:#CBD5E1;"></i>No agent activity recorded yet. Run a manual scan to get started.</div>`
+    : agentLogs.map(log => {
+        const timeStr = new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const dateStr = new Date(log.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' });
+        return `
+        <div class="agent-log-item">
+          <div class="agent-log-icon ${log.type}">
+            <i class="ti ${log.type === 'success' ? 'ti-check' : (log.type === 'warning' ? 'ti-alert-triangle' : 'ti-info-circle')}"></i>
+          </div>
+          <div style="flex:1;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
+              <span style="font-weight:600; color:var(--color-text-primary);">${log.action}</span>
+              <span style="font-size:10px; color:var(--color-text-tertiary);">${dateStr} ${timeStr}</span>
+            </div>
+            <div style="font-size:12px; color:var(--color-text-secondary); line-height:1.4;">${log.details}</div>
+          </div>
+        </div>`;
+      }).join('');
+
+  return `
+  <div>
+    <!-- Hero Header -->
+    <div class="agent-hero">
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px; flex-wrap:wrap;">
+        <div>
+          <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+            <span class="badge" style="background:#10B981; color:white; font-weight:600; font-size:11px; padding:4px 8px;">
+              🤖 AI SMART AGENT
+            </span>
+            <span style="font-size:12px; opacity:0.85;">Status: ${agentConfig.enabled ? '🟢 Active & Monitoring' : '🔴 Paused'}</span>
+          </div>
+          <h2 style="font-size:22px; font-weight:700; margin-bottom:6px;">Auto-Pilot Payment & Overdue Agent</h2>
+          <p style="font-size:13px; opacity:0.85; max-width:560px;">
+            The Smart Agent continuously scans incoming bank credit SMS, auto-records loan repayments, monitors overdue dates, and fires desktop notifications 24/7.
+          </p>
+        </div>
+
+        <div style="display:flex; align-items:center; gap:12px; background:rgba(255,255,255,0.1); padding:10px 16px; border-radius:12px; backdrop-filter:blur(4px);">
+          <div style="font-size:13px; font-weight:600;">Agent Power</div>
+          <label class="switch-label">
+            <input type="checkbox" class="switch-input" ${agentConfig.enabled ? 'checked' : ''} onchange="window.agentConfig.enabled=this.checked; window.saveAgentConfig(); window.renderPage('agent');" />
+            <span class="switch-slider"></span>
+          </label>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:12px; margin-top:20px; align-items:center; flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="window.runSmartAgentScan(); showToast('Manual Agent Scan executed!');" style="background:#10B981; border-color:#10B981; font-weight:600;">
+          <i class="ti ti-bolt"></i> Run Agent Scan Now
+        </button>
+        <button class="btn" onclick="window.requestNotificationPermission()" style="background:rgba(255,255,255,0.15); color:white; border:none;">
+          <i class="ti ti-bell"></i> ${Notification && Notification.permission === 'granted' ? 'Notifications Enabled ✓' : 'Enable Push Notifications'}
+        </button>
+        <span style="font-size:11px; opacity:0.75; margin-left:auto;">Last scanned: ${lastScanStr}</span>
+      </div>
+    </div>
+
+    <!-- Agent Metrics Grid -->
+    <div class="stat-grid" style="margin-bottom:20px;">
+      <div class="stat-card">
+        <div class="stat-label">MONITORED BORROWERS</div>
+        <div class="stat-value">${totalMonitored}</div>
+        <div class="stat-sub" style="color:#10B981;">Active in Database</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">ACTIVE LOANS</div>
+        <div class="stat-value" style="color:#185FA5;">${activeCount}</div>
+        <div class="stat-sub">Tracked by Agent</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">OVERDUE ALERT LOANS</div>
+        <div class="stat-value" style="color:#A32D2D;">${overdueCount}</div>
+        <div class="stat-sub" style="color:#A32D2D;">Flagged by Agent</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">AGENT LOGS</div>
+        <div class="stat-value" style="color:#534AB7;">${agentLogs.length}</div>
+        <div class="stat-sub">Automated Actions</div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <!-- Agent Configuration Card -->
+      <div class="card">
+        <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+          <span><i class="ti ti-adjustments-horizontal"></i> Agent Capabilities & Rules</span>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:14px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:0.5px solid var(--color-border-tertiary);">
+            <div>
+              <div style="font-weight:600; font-size:13px;">📱 Auto-Match & Record SMS Payments</div>
+              <div style="font-size:11px; color:var(--color-text-tertiary);">Automatically parse incoming credit SMS and add repayments</div>
+            </div>
+            <label class="switch-label">
+              <input type="checkbox" class="switch-input" ${agentConfig.autoProcessSms ? 'checked' : ''} onchange="window.agentConfig.autoProcessSms=this.checked; window.saveAgentConfig();" />
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:0.5px solid var(--color-border-tertiary);">
+            <div>
+              <div style="font-weight:600; font-size:13px;">⚠️ Auto-Flag Overdue Loans</div>
+              <div style="font-size:11px; color:var(--color-text-tertiary);">Automatically change active loans to overdue past due date</div>
+            </div>
+            <label class="switch-label">
+              <input type="checkbox" class="switch-input" ${agentConfig.autoFlagOverdue ? 'checked' : ''} onchange="window.agentConfig.autoFlagOverdue=this.checked; window.saveAgentConfig();" />
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:0.5px solid var(--color-border-tertiary);">
+            <div>
+              <div style="font-weight:600; font-size:13px;">🔔 Real-Time Browser Push Alerts</div>
+              <div style="font-size:11px; color:var(--color-text-tertiary);">Show popup notifications on payment auto-records and overdue alerts</div>
+            </div>
+            <label class="switch-label">
+              <input type="checkbox" class="switch-input" ${agentConfig.pushNotifications ? 'checked' : ''} onchange="window.agentConfig.pushNotifications=this.checked; window.saveAgentConfig();" />
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div style="font-weight:600; font-size:13px;">⏱️ Background Scan Frequency</div>
+              <div style="font-size:11px; color:var(--color-text-tertiary);">How often the agent checks database & SMS logs</div>
+            </div>
+            <select style="width:auto; font-size:12px; padding:4px 8px;" onchange="window.agentConfig.scanIntervalSec=+this.value; window.saveAgentConfig(); window.initSmartAgent();">
+              <option value="15" ${agentConfig.scanIntervalSec === 15 ? 'selected' : ''}>Every 15 sec</option>
+              <option value="30" ${agentConfig.scanIntervalSec === 30 ? 'selected' : ''}>Every 30 sec</option>
+              <option value="60" ${agentConfig.scanIntervalSec === 60 ? 'selected' : ''}>Every 1 min</option>
+              <option value="300" ${agentConfig.scanIntervalSec === 300 ? 'selected' : ''}>Every 5 min</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Agent Activity Log Timeline Stream -->
+      <div class="card">
+        <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+          <span><i class="ti ti-activity"></i> Live Agent Activity Log</span>
+          <button class="btn btn-sm" onclick="window.agentLogs=[]; localStorage.removeItem('lb_agent_logs'); window.renderPage('agent');" style="font-size:11px; padding:2px 6px;">Clear Logs</button>
+        </div>
+        <div class="agent-log-list">
+          ${logsHtml}
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+window.renderAgent = renderAgent;
+
 // --- INITIALIZATION ---
 document.addEventListener('DOMContentLoaded', async () => {
   updateLenderNameUI();
@@ -4537,6 +4886,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       nav('dashboard');
       initRealtimeSms();
       processUnprocessedSms();
+      initSmartAgent();
     });
   }
   

@@ -54,6 +54,10 @@
           <i class="ti ti-message" aria-hidden="true"></i>
           <span id="nt-messages">Messages</span>
         </div>
+        <div class="nav-item" onclick="window.nav('agent')" id="nav-agent">
+          <i class="ti ti-robot" aria-hidden="true"></i>
+          <span id="nt-agent">Smart Agent</span>
+        </div>
       </div>
       <div class="nav-section">
         <div class="nav-label" id="nl-manage">Manage</div>
@@ -95,6 +99,10 @@
       <div id="topbar">
         <h2 id="page-title">Dashboard</h2>
         <div id="topbar-right">
+          <div id="topbar-agent-status" onclick="window.nav('agent')" title="Smart Agent Status" style="cursor:pointer; display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:12px; font-size:11px; font-weight:600; background:#E1F5EE; color:#0F6E56; border:0.5px solid #A7F3D0;">
+            <span class="pulse-dot" style="background:#10B981;"></span>
+            <span>Agent Active</span>
+          </div>
           <button class="lang-btn active" onclick="window.setLang('en')">EN</button>
           <button class="lang-btn" onclick="window.setLang('te')">తెలుగు</button>
           <button class="lang-btn" onclick="window.setLang('hi')">हिन्दी</button>
