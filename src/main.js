@@ -670,13 +670,42 @@ function getBorrowerOverdueLoan(borrowerId) {
   return null;
 }
 
+function generateUpiPayBlock(amount, note = 'LenderBook Repayment') {
+  const upiId = settings.fatherUpiId || (settings.fatherPhone ? settings.fatherPhone.replace(/\D/g, '') + '@ybl' : '');
+  const cleanAmt = Math.round(amount || 0);
+  if (!cleanAmt || cleanAmt <= 0) return '';
+  
+  const lenderName = settings.lenderName || 'Ramaiah Finance';
+  
+  if (!upiId) {
+    return `\n\n💳 *UPI Payment:* (Configure Father's UPI ID in Settings to auto-generate direct GPay/PhonePe link & QR scanner)`;
+  }
+  
+  // Direct tap-to-pay link for GPay, PhonePe, Paytm, BHIM, etc.
+  const upiDeepLink = `upi://pay?pa=${upiId}&pn=${encodeURIComponent(lenderName)}&am=${cleanAmt}&cu=INR&tn=${encodeURIComponent(note)}`;
+  
+  // Instant QR Scanner web link (opens QR code image directly in browser)
+  const qrScannerUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(upiDeepLink)}`;
+
+  return `\n\n💳 *Pay via UPI (GPay / PhonePe / Paytm / BHIM):*
+• UPI ID: ${upiId}
+• Amount: ${fmt(cleanAmt)}
+
+👇 *Tap link to Pay Directly:*
+${upiDeepLink}
+
+🖼️ *Scan QR Code Link:*
+${qrScannerUrl}`;
+}
+
 function generateTeluguOverdueMessage(borrower, loan) {
   const stats = getLoanStats(loan);
+  const upiBlock = generateUpiPayBlock(stats.amountLeft, `Repayment-${borrower.name}`);
   return `నమస్కారం ${borrower.name} గారు,
 
 ${settings.lenderName} నుండి సమాచారం. మీ లోన్ బకాయి చెల్లింపు గడువు తేదీ (${loan.dueDate}) ముగిసినది.
 
-బకాయి ఉన్న మొత్తం: ${fmt(stats.amountLeft)}
+బకాయి ఉన్న మొత్తం: ${fmt(stats.amountLeft)}${upiBlock}
 
 దయచేసి మీ బకాయిని వెంటనే చెల్లించగలరు.
 
@@ -1049,7 +1078,8 @@ function renderBorrowerDetail(id) {
       <div class="detail-kv"><span class="detail-key">${t('address')}</span><span>${b.address}</span></div>
       <div class="detail-kv"><span class="detail-key">${t('status')}</span><span class="badge ${b.isActive ? 'badge-active' : 'badge-closed'}">${b.isActive ? 'Active' : 'Inactive'}</span></div>
       <div class="detail-kv"><span class="detail-key">Total paid</span><span style="color:#3B6D11;font-weight:500">${fmt(totalPaid)}</span></div>
-      <div style="margin-top:12px;display:flex;gap:8px">
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-sm" onclick="window.showUpiQrModal(${b.id})" style="display:inline-flex; align-items:center; gap:4px; background:#534AB7; color:white; border:none; padding:4px 10px; font-weight:600; border-radius:var(--border-radius-sm);"><i class="ti ti-qrcode"></i> QR Pay</button>
         ${overdueLoan ? `<button class="btn btn-sm btn-danger" onclick="window.showReminderModal(${b.id})">Send Reminder</button>` : ''}
         <button class="btn btn-sm" onclick="window.showAddLoan(${b.id})">${t('addLoan')}</button>
         <button class="btn btn-sm" onclick="window.showEditBorrower(${b.id})"><i class="ti ti-edit"></i> Edit Profile</button>
@@ -1315,6 +1345,9 @@ function renderCallList() {
           <a class="btn btn-sm btn-primary" href="tel:${phone}" style="text-decoration:none;">
             <i class="ti ti-phone"></i> Call Now
           </a>
+          <button class="btn btn-sm" onclick="window.showUpiQrModal(${b.id})" style="display:inline-flex; align-items:center; gap:4px; background:#534AB7; color:white; border:none; padding:4px 10px; font-weight:600; border-radius:var(--border-radius-sm);">
+            <i class="ti ti-qrcode"></i> QR Pay
+          </button>
           <button class="btn btn-sm btn-danger" onclick="window.showReminderModal(${b.id})">
             <i class="ti ti-brand-whatsapp"></i> Remind
           </button>
@@ -2018,12 +2051,16 @@ function updateReminderPreview(borrowerId) {
     const fine = +document.getElementById('r-fine').value || 0;
     const l = getBorrowerOverdueLoan(borrowerId) || loans.find(x => x.borrowerId === borrowerId && ['ACTIVE', 'OVERDUE'].includes(x.status));
     
-    const baseMsg = l ? generateTeluguOverdueMessage(b, l) : '';
-    let msg = baseMsg;
-    if (fine > 0) {
-      const stats = l ? getLoanStats(l) : { amountLeft: 0 };
+    let msg = '';
+    if (l) {
+      const stats = getLoanStats(l);
       const total = stats.amountLeft + fine;
-      msg = `నమస్కారం ${b.name} గారు,\n\n${settings.lenderName} నుండి సమాచారం. మీ లోన్ బకాయి చెల్లింపు గడువు తేదీ ${l ? `(${l.dueDate})` : ''} ముగిసినది.\n\nబకాయి ఉన్న మొత్తం: ${fmt(stats.amountLeft)}\nజరిమానా (Fine): ${fmt(fine)}\nమొత్తం బకాయి (Total Due): ${fmt(total)}\n\nదయచేసి మీ బకాయిని వెంటనే చెల్లించగలరు.\n\nధన్యవాదాలు,\n${settings.lenderName}`;
+      const upiBlock = generateUpiPayBlock(total, `Repayment-${b.name}`);
+      if (fine > 0) {
+        msg = `నమస్కారం ${b.name} గారు,\n\n${settings.lenderName} నుండి సమాచారం. మీ లోన్ బకాయి చెల్లింపు గడువు తేదీ (${l.dueDate}) ముగిసినది.\n\nబకాయి ఉన్న మొత్తం: ${fmt(stats.amountLeft)}\nజరిమానా (Fine): ${fmt(fine)}\nమొత్తం బకాయి (Total Due): ${fmt(total)}${upiBlock}\n\nదయచేసి మీ బకాయిని వెంటనే చెల్లించగలరు.\n\nధన్యవాదాలు,\n${settings.lenderName}`;
+      } else {
+        msg = generateTeluguOverdueMessage(b, l);
+      }
     }
     
     previewText.textContent = msg;
@@ -2037,8 +2074,9 @@ function updateReminderPreview(borrowerId) {
     const l = loans.find(x => x.borrowerId === borrowerId && ['ACTIVE', 'OVERDUE'].includes(x.status));
     const repaymentAmt = l ? l.repaymentAmount : 0;
     const tomorrowStr = new Date(Date.now() + 86400000).toLocaleDateString('en-CA');
+    const upiBlock = generateUpiPayBlock(repaymentAmt, `Repayment-${b.name}`);
     
-    const msg = `నమస్తే ${b.name},\nరేపు (${tomorrowStr}) మీ వాయిదా చెల్లింపు రూ. ${fmt(repaymentAmt)} చెల్లించాల్సి ఉంది. దయచేసి UPI లేదా నగదు రూపంలో చెల్లించండి. ధన్యవాదాలు.`;
+    const msg = `నమస్తే ${b.name},\nరేపు (${tomorrowStr}) మీ వాయిదా చెల్లింపు రూ. ${fmt(repaymentAmt)} చెల్లించాల్సి ఉంది.${upiBlock}\n\nదయచేసి UPI లేదా నగదు రూపంలో చెల్లించండి. ధన్యవాదాలు.`;
     
     previewText.textContent = msg;
     
@@ -2062,6 +2100,67 @@ function updateReminderPreview(borrowerId) {
   }
 }
 window.updateReminderPreview = updateReminderPreview;
+
+function showUpiQrModal(borrowerId, customAmount = 0) {
+  const b = borrowers.find(x => x.id === borrowerId);
+  if (!b) return;
+  
+  const l = getBorrowerOverdueLoan(borrowerId) || loans.find(x => x.borrowerId === borrowerId && ['ACTIVE', 'OVERDUE'].includes(x.status));
+  const payAmt = customAmount > 0 ? customAmount : (l ? getLoanStats(l).amountLeft : 0);
+  
+  const upiId = settings.fatherUpiId || (settings.fatherPhone ? settings.fatherPhone.replace(/\D/g, '') + '@ybl' : '');
+  const lenderName = settings.lenderName || 'Ramaiah Finance';
+  const cleanAmt = Math.round(payAmt);
+  const upiDeepLink = upiId ? `upi://pay?pa=${upiId}&pn=${encodeURIComponent(lenderName)}&am=${cleanAmt}&cu=INR&tn=${encodeURIComponent('Repayment-' + b.name)}` : '';
+  const qrUrl = upiDeepLink ? `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(upiDeepLink)}` : '';
+
+  const overdueMsg = l ? generateTeluguOverdueMessage(b, l) : `Pay ${fmt(cleanAmt)} via UPI link: ${upiDeepLink}`;
+
+  document.getElementById('modal-container').innerHTML = `
+  <div class="modal-overlay">
+    <div class="modal" style="width: 440px; max-width: 95%; text-align: center;">
+      <div class="modal-title" style="justify-content: space-between;">
+        <span><i class="ti ti-qrcode"></i> UPI QR & Payment Scanner</span>
+        <button class="btn btn-sm" onclick="window.closeModal()">✕</button>
+      </div>
+      
+      <div style="padding: 12px 0;">
+        <h3 style="font-size: 16px; color: var(--color-text-primary); margin-bottom: 2px;">${b.name}</h3>
+        <div style="font-size: 24px; font-weight: 700; color: #10B981; margin-bottom: 14px;">${fmt(cleanAmt)}</div>
+        
+        ${upiId ? `
+          <div style="background: white; padding: 16px; border-radius: 16px; display: inline-block; box-shadow: 0 4px 16px rgba(0,0,0,0.12); margin-bottom: 12px; border: 1px solid #E2E8F0;">
+            <img src="${qrUrl}" alt="UPI Payment QR Code" style="width: 220px; height: 220px; display: block;" />
+          </div>
+          <div style="font-size: 13px; font-weight: 600; color: var(--color-text-primary); margin-bottom: 4px;">
+            UPI ID: <span style="color: #534AB7;">${upiId}</span>
+          </div>
+          <div style="font-size: 11px; color: var(--color-text-tertiary); margin-bottom: 16px;">
+            Scan using PhonePe, Google Pay, Paytm, or BHIM
+          </div>
+        ` : `
+          <div style="background: #FEF2F2; border: 1px solid #FCA5A5; color: #991B1B; font-size: 12px; padding: 16px; border-radius: 12px; margin-bottom: 16px; line-height: 1.5;">
+            ⚠️ <strong>Father's UPI ID not configured!</strong><br/>
+            Please go to <strong>Settings</strong> and enter Father's UPI ID (e.g. <code>9494201305@ybl</code>) to activate direct payment links & QR scanners.
+          </div>
+        `}
+
+        <div style="display: flex; flex-direction: column; gap: 8px; max-width: 320px; margin: 0 auto;">
+          ${upiId ? `
+            <button class="btn btn-primary" onclick="window.sendDirectWhatsApp(${borrowerId}, encodeURIComponent(\`${overdueMsg.replace(/`/g, '\\`').replace(/'/g, "\\'")}\`))" style="justify-content: center; background: #25D366; border-color: #25D366; font-weight: 600;">
+              <i class="ti ti-brand-whatsapp"></i> Send QR & Link on WhatsApp
+            </button>
+            <button class="btn btn-secondary" onclick="navigator.clipboard.writeText('${upiDeepLink}'); showToast('UPI Payment Link copied!');" style="justify-content: center; font-weight: 500;">
+              <i class="ti ti-copy"></i> Copy Direct UPI Link
+            </button>
+          ` : ''}
+          <button class="btn" onclick="window.closeModal()" style="justify-content: center;">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+window.showUpiQrModal = showUpiQrModal;
 
 function showSendMessage(borrowerId) {
   const b = borrowers.find(x => x.id === borrowerId);
