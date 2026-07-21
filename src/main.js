@@ -25,6 +25,7 @@ import {
 } from './db.js';
 import { parseBankSMS, matchVPAToBorrower, SAMPLE_SMS } from './sms-parser.js';
 import { jsPDF } from 'jspdf';
+import QRCode from 'qrcode';
 
 
 // --- TRANSLATIONS ---
@@ -2104,17 +2105,17 @@ async function sendWhatsAppWithQRImage(borrowerId, amount = 0, textMsg = '') {
     finalMsg = l ? generateTeluguOverdueMessage(b, l) : `నమస్కారం ${b.name} గారు, ₹${cleanAmt} చెల్లించగలరు.`;
   }
 
-  // 1. Try Web Share API with actual PNG image file (works on Android / mobile devices!)
-  if (upiId && cleanAmt > 0 && navigator.canShare) {
+  // 1. Generate QR PNG data URL locally using QRCode library (instant, offline, reliable)
+  if (upiId && cleanAmt > 0) {
     try {
       const upiDeepLink = `upi://pay?pa=${upiId}&am=${cleanAmt}`;
-      const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&format=png&data=${encodeURIComponent(upiDeepLink)}`;
-      
-      const response = await fetch(qrImageUrl);
-      const blob = await response.blob();
+      const qrDataUrl = await QRCode.toDataURL(upiDeepLink, { width: 500, margin: 2 });
+      const blobRes = await fetch(qrDataUrl);
+      const blob = await blobRes.blob();
       const qrFile = new File([blob], 'payment-qr.png', { type: 'image/png' });
 
-      if (navigator.canShare({ files: [qrFile] })) {
+      // Mobile Web Share API
+      if (navigator.canShare && navigator.canShare({ files: [qrFile] })) {
         try {
           await addMessage({ borrowerId: b.id, content: finalMsg, sentAt: new Date().toISOString(), direction: 'SENT' });
         } catch (e) { console.error('Add message error:', e); }
@@ -2124,36 +2125,14 @@ async function sendWhatsAppWithQRImage(borrowerId, amount = 0, textMsg = '') {
           title: `${b.name} - Payment QR`,
           text: finalMsg
         });
-        showToast('QR Code photo and payment message shared to WhatsApp! ✓');
+        showToast('QR Code photo & payment message shared to WhatsApp! ✓');
         return;
       }
-    } catch (e) {
-      console.log('Web share failed or cancelled, falling back to WhatsApp window + clipboard:', e);
-    }
-  }
 
-  // 2. Desktop Fallback: Copy QR Image to Clipboard and open WhatsApp window
-  if (upiId && cleanAmt > 0) {
-    try {
-      const upiDeepLink = `upi://pay?pa=${upiId}&am=${cleanAmt}`;
-      const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&format=png&data=${encodeURIComponent(upiDeepLink)}`;
-      
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0);
-        const dataUrl = canvas.toDataURL('image/png');
-        copyImageToClipboard(dataUrl);
-      };
-      img.src = qrImageUrl;
-    } catch (err) {
-      console.error('Copy QR image to clipboard error:', err);
+      // Desktop Clipboard Copy Fallback
+      copyImageToClipboard(qrDataUrl);
+    } catch (e) {
+      console.error('QR image generation/share error:', e);
     }
   }
 
@@ -2324,7 +2303,7 @@ function renderMessages() {
 }
 window.renderMessages = renderMessages;
 
-function showUpiQrModal(borrowerId, customAmount = 0) {
+async function showUpiQrModal(borrowerId, customAmount = 0) {
   const b = borrowers.find(x => x.id === borrowerId);
   if (!b) return;
   
@@ -2335,7 +2314,13 @@ function showUpiQrModal(borrowerId, customAmount = 0) {
   const lenderName = settings.lenderName || 'Ramaiah Finance';
   const cleanAmt = Math.round(payAmt);
   const upiDeepLink = upiId ? `upi://pay?pa=${upiId}&am=${cleanAmt}` : '';
-  const qrUrl = upiDeepLink ? `https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(upiDeepLink)}` : '';
+  
+  let qrUrl = '';
+  if (upiDeepLink) {
+    try {
+      qrUrl = await QRCode.toDataURL(upiDeepLink, { width: 350, margin: 2 });
+    } catch (e) { console.error('QR render error:', e); }
+  }
 
   const overdueMsg = l ? generateTeluguOverdueMessage(b, l) : `Pay ${fmt(cleanAmt)} via UPI link: ${upiDeepLink}`;
 
