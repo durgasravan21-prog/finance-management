@@ -677,14 +677,14 @@ function generateUpiPayBlock(amount, note = 'Repayment') {
 
   const upiDeepLink = `upi://pay?pa=${upiId}&am=${cleanAmt}`;
 
-  return `\n\n💳 *UPI ID:* ${upiId}\n👇 *Tap to Pay:*\n${upiDeepLink}`;
+  return `\n\n👇 *Payment Link:*\n${upiDeepLink}`;
 }
 
 function generateTeluguOverdueMessage(borrower, loan) {
   const stats = getLoanStats(loan);
-  const upiBlock = generateUpiPayBlock(stats.amountLeft, `Repayment-${borrower.name}`);
+  const upiBlock = generateUpiPayBlock(stats.amountLeft);
   
-  let template = customTemplates.overdue || `నమస్కారం {BorrowerName} గారు,\n\n{LenderName} నుండి సమాచారం. మీ లోన్ బకాయి చెల్లింపు గడువు తేదీ ({DueDate}) ముగిసినది.\n\nబకాయి ఉన్న మొత్తం: {OutstandingBal}{UpiPaymentBlock}\n\nదయచేసి మీ బకాయిని వెంటనే చెల్లించగలరు.\n\nధన్యవాదాలు,\n{LenderName}`;
+  let template = customTemplates.overdue || `నమస్కారం {BorrowerName} గారు 🙏\n\n{LenderName} నుండి సమాచారం.\n\nమీ బకాయి మొత్తం: {OutstandingBal}{UpiPaymentBlock}\n\nధన్యవాదాలు,\n{LenderName}`;
   
   if (!template.includes('{UpiPaymentBlock}')) {
     template = template.trim() + `{UpiPaymentBlock}`;
@@ -2112,7 +2112,7 @@ async function sendWhatsAppWithQRImage(borrowerId, amount = 0, textMsg = '') {
       
       const response = await fetch(qrImageUrl);
       const blob = await response.blob();
-      const qrFile = new File([blob], `UPI-QR-${b.name}.png`, { type: 'image/png' });
+      const qrFile = new File([blob], 'payment-qr.png', { type: 'image/png' });
 
       if (navigator.canShare({ files: [qrFile] })) {
         try {
@@ -2121,7 +2121,7 @@ async function sendWhatsAppWithQRImage(borrowerId, amount = 0, textMsg = '') {
 
         await navigator.share({
           files: [qrFile],
-          title: `UPI QR Scanner - ${fmt(cleanAmt)}`,
+          title: `${b.name} - Payment QR`,
           text: finalMsg
         });
         showToast('QR Code photo and payment message shared to WhatsApp! ✓');
