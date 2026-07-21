@@ -964,6 +964,52 @@ textarea:focus {
   color: #0369A1;
 }
 
+.agent-log-icon.receipt {
+  background: #ECFDF5;
+  color: #059669;
+}
+
+/* Agent Action Queue Item */
+.agent-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--color-background-primary);
+  border: 0.5px solid var(--color-border-secondary);
+  border-radius: var(--border-radius-md);
+  transition: border-color 0.15s, box-shadow 0.15s;
+  flex-wrap: wrap;
+}
+
+.agent-queue-item:hover {
+  border-color: #7C3AED;
+  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.08);
+}
+
+.agent-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#agent-queue-badge {
+  display: none;
+  background: #EF4444;
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  position: absolute;
+  top: 2px;
+  right: 2px;
+}
+
 /* Switch Toggle Styling */
 .switch-label {
   display: inline-flex;

@@ -4506,14 +4506,38 @@ window.deleteBorrowingRepayment = deleteBorrowingRepayment;
 window.closeBorrowing = closeBorrowing;
 
 // ==========================================
-// 🤖 LENDERBOOK SMART AGENT ENGINE
+// 🤖 LENDERBOOK SMART AGENT ENGINE v2.0
 // ==========================================
-let agentConfig = JSON.parse(localStorage.getItem('lb_agent_config') || '{"enabled":true,"autoProcessSms":true,"autoFlagOverdue":true,"pushNotifications":true,"scanIntervalSec":30}');
+const AGENT_CONFIG_DEFAULTS = {
+  enabled: true,
+  autoProcessSms: true,
+  autoFlagOverdue: true,
+  pushNotifications: true,
+  autoSendReminders: true,
+  autoSendReceipts: true,
+  autoUpcomingReminders: true,
+  reminderDaysBeforeDue: 2,
+  scanIntervalSec: 30
+};
+let agentConfig = { ...AGENT_CONFIG_DEFAULTS, ...JSON.parse(localStorage.getItem('lb_agent_config') || '{}') };
 let agentLogs = JSON.parse(localStorage.getItem('lb_agent_logs') || '[]');
+let agentQueue = JSON.parse(localStorage.getItem('lb_agent_queue') || '[]');
 let agentLastScan = null;
 let agentTimerId = null;
+// Track which reminders/receipts we've already queued today so we don't duplicate
+let agentSentToday = JSON.parse(localStorage.getItem('lb_agent_sent_today') || '{}');
 window.agentConfig = agentConfig;
 window.agentLogs = agentLogs;
+window.agentQueue = agentQueue;
+
+// Reset daily tracking at midnight
+function resetDailyTracking() {
+  const todayKey = new Date().toISOString().split('T')[0];
+  if (agentSentToday._date !== todayKey) {
+    agentSentToday = { _date: todayKey };
+    localStorage.setItem('lb_agent_sent_today', JSON.stringify(agentSentToday));
+  }
+}
 
 function saveAgentConfig() {
   localStorage.setItem('lb_agent_config', JSON.stringify(agentConfig));
@@ -4521,16 +4545,21 @@ function saveAgentConfig() {
 }
 window.saveAgentConfig = saveAgentConfig;
 
+function saveAgentQueue() {
+  localStorage.setItem('lb_agent_queue', JSON.stringify(agentQueue));
+  updateAgentQueueBadge();
+}
+
 function logAgentActivity(action, details, type = 'info') {
   const logEntry = {
     id: Date.now() + Math.random().toString(36).substr(2, 4),
     timestamp: new Date().toISOString(),
     action,
     details,
-    type // 'success', 'warning', 'info'
+    type // 'success', 'warning', 'info', 'receipt'
   };
   agentLogs.unshift(logEntry);
-  if (agentLogs.length > 50) agentLogs = agentLogs.slice(0, 50);
+  if (agentLogs.length > 100) agentLogs = agentLogs.slice(0, 100);
   localStorage.setItem('lb_agent_logs', JSON.stringify(agentLogs));
   
   if (typeof currentPage !== 'undefined' && currentPage === 'agent') {
@@ -4542,11 +4571,12 @@ window.logAgentActivity = logAgentActivity;
 function updateAgentTopbarBadge() {
   const badge = document.getElementById('topbar-agent-status');
   if (!badge) return;
+  const pendingCount = agentQueue.filter(q => q.status === 'PENDING').length;
   if (agentConfig.enabled) {
     badge.style.background = '#E1F5EE';
     badge.style.color = '#0F6E56';
     badge.style.borderColor = '#A7F3D0';
-    badge.innerHTML = `<span class="pulse-dot" style="background:#10B981;"></span> <span>Agent Active</span>`;
+    badge.innerHTML = `<span class="pulse-dot" style="background:#10B981;"></span> <span>Agent Active${pendingCount > 0 ? ` (${pendingCount})` : ''}</span>`;
   } else {
     badge.style.background = '#FEF2F2';
     badge.style.color = '#991B1B';
@@ -4555,6 +4585,20 @@ function updateAgentTopbarBadge() {
   }
 }
 window.updateAgentTopbarBadge = updateAgentTopbarBadge;
+
+function updateAgentQueueBadge() {
+  const pendingCount = agentQueue.filter(q => q.status === 'PENDING').length;
+  const navBadge = document.getElementById('agent-queue-badge');
+  if (navBadge) {
+    if (pendingCount > 0) {
+      navBadge.textContent = pendingCount;
+      navBadge.style.display = 'inline-flex';
+    } else {
+      navBadge.style.display = 'none';
+    }
+  }
+  updateAgentTopbarBadge();
+}
 
 async function requestNotificationPermission() {
   if (!('Notification' in window)) {
@@ -4590,29 +4634,201 @@ function triggerNotification(title, body) {
   }
 }
 
+// ==========================================
+// 📬 AGENT ACTION QUEUE SYSTEM
+// ==========================================
+function queueAgentAction(type, borrowerId, loanId, data) {
+  const todayKey = new Date().toISOString().split('T')[0];
+  const dedupKey = `${type}_${borrowerId}_${loanId}_${todayKey}`;
+  
+  // Prevent duplicate queuing for the same action today
+  if (agentSentToday[dedupKey]) return null;
+  // Also check if already in queue as PENDING
+  if (agentQueue.some(q => q.dedupKey === dedupKey && q.status === 'PENDING')) return null;
+  
+  const action = {
+    id: Date.now() + '_' + Math.random().toString(36).substr(2, 6),
+    type, // 'OVERDUE_REMINDER', 'PAYMENT_RECEIPT', 'UPCOMING_REMINDER', 'LATE_WARNING'
+    borrowerId,
+    loanId,
+    data, // { message, amount, receiptNo, receiptImage, borrowerName, borrowerPhone, ... }
+    status: 'PENDING', // 'PENDING', 'SENT', 'DISMISSED'
+    createdAt: new Date().toISOString(),
+    dedupKey
+  };
+  
+  agentQueue.unshift(action);
+  if (agentQueue.length > 200) agentQueue = agentQueue.slice(0, 200);
+  saveAgentQueue();
+  
+  agentSentToday[dedupKey] = true;
+  localStorage.setItem('lb_agent_sent_today', JSON.stringify(agentSentToday));
+  
+  return action;
+}
+
+async function executeAgentAction(actionId) {
+  const action = agentQueue.find(q => q.id === actionId);
+  if (!action || action.status !== 'PENDING') return;
+  
+  const b = borrowers.find(x => x.id === action.borrowerId);
+  if (!b) { showToast('Borrower not found'); return; }
+  
+  const phone = b.phone ? b.phone.replace(/\D/g, '') : '';
+  const cleanPhone = phone.startsWith('91') ? phone : '91' + phone;
+  
+  if (action.type === 'PAYMENT_RECEIPT') {
+    // Share receipt via WhatsApp
+    try {
+      const receiptDataUrl = action.data.receiptImage;
+      if (receiptDataUrl && receiptDataUrl.startsWith('data:image/')) {
+        const blobRes = await fetch(receiptDataUrl);
+        const blob = await blobRes.blob();
+        const receiptFile = new File([blob], `Receipt-${action.data.receiptNo || 'payment'}.png`, { type: 'image/png' });
+        
+        if (navigator.canShare && navigator.canShare({ files: [receiptFile] })) {
+          await navigator.share({
+            files: [receiptFile],
+            title: `Receipt - ${b.name}`,
+            text: action.data.message
+          });
+          action.status = 'SENT';
+          saveAgentQueue();
+          logAgentActivity('🧾 Receipt Sent', `Payment receipt sent to ${b.name} via WhatsApp`, 'success');
+          try { await addMessage({ borrowerId: b.id, content: action.data.message, sentAt: new Date().toISOString(), direction: 'SENT' }); } catch(e) {}
+          showToast(`Receipt shared to ${b.name}! ✓`);
+          if (currentPage === 'agent') renderPage('agent');
+          return;
+        }
+        // Desktop fallback: copy to clipboard
+        copyImageToClipboard(receiptDataUrl);
+      }
+    } catch (e) {
+      console.error('Receipt share error:', e);
+    }
+    // Fallback: open WhatsApp with text
+    try { await addMessage({ borrowerId: b.id, content: action.data.message, sentAt: new Date().toISOString(), direction: 'SENT' }); } catch(e) {}
+    const url = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(action.data.message)}`;
+    window.open(url, '_blank');
+    action.status = 'SENT';
+    saveAgentQueue();
+    logAgentActivity('🧾 Receipt Sent', `Receipt opened in WhatsApp for ${b.name}. Paste image from clipboard.`, 'success');
+    showToast(`WhatsApp opened for ${b.name}. Paste receipt image (Ctrl+V).`, 5000);
+  } else {
+    // OVERDUE_REMINDER, UPCOMING_REMINDER, LATE_WARNING → send WhatsApp with QR
+    const l = loans.find(x => x.id === action.loanId);
+    const amount = action.data.amount || (l ? calcOutstanding(l) : 0);
+    
+    try { await addMessage({ borrowerId: b.id, content: action.data.message, sentAt: new Date().toISOString(), direction: 'SENT' }); } catch(e) {}
+    
+    // Try Web Share with QR image
+    const upiId = settings.fatherUpiId || (settings.fatherPhone ? settings.fatherPhone.replace(/\D/g, '') + '@ybl' : '');
+    if (upiId && amount > 0) {
+      try {
+        const upiDeepLink = `upi://pay?pa=${upiId}&am=${Math.round(amount)}`;
+        const qrDataUrl = await QRCode.toDataURL(upiDeepLink, { width: 500, margin: 2 });
+        const blobRes = await fetch(qrDataUrl);
+        const blob = await blobRes.blob();
+        const qrFile = new File([blob], 'payment-qr.png', { type: 'image/png' });
+        
+        if (navigator.canShare && navigator.canShare({ files: [qrFile] })) {
+          await navigator.share({
+            files: [qrFile],
+            title: `${b.name} - Payment Reminder`,
+            text: action.data.message
+          });
+          action.status = 'SENT';
+          saveAgentQueue();
+          logAgentActivity(`📤 ${action.type === 'OVERDUE_REMINDER' ? 'Overdue Reminder' : 'Payment Reminder'} Sent`, `WhatsApp reminder sent to ${b.name} for ₹${Math.round(amount).toLocaleString('en-IN')}`, 'success');
+          showToast(`Reminder sent to ${b.name}! ✓`);
+          if (currentPage === 'agent') renderPage('agent');
+          return;
+        }
+        copyImageToClipboard(qrDataUrl);
+      } catch (e) {
+        console.error('QR share error:', e);
+      }
+    }
+    
+    const url = `https://api.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(action.data.message)}`;
+    window.open(url, '_blank');
+    action.status = 'SENT';
+    saveAgentQueue();
+    logAgentActivity(`📤 Reminder Sent`, `WhatsApp opened for ${b.name}`, 'success');
+    showToast(`WhatsApp opened for ${b.name}. Paste QR (Ctrl+V) if copied.`, 5000);
+  }
+  
+  if (currentPage === 'agent') renderPage('agent');
+}
+window.executeAgentAction = executeAgentAction;
+
+function dismissAgentAction(actionId) {
+  const action = agentQueue.find(q => q.id === actionId);
+  if (action) {
+    action.status = 'DISMISSED';
+    saveAgentQueue();
+    logAgentActivity('🚫 Action Dismissed', `Dismissed ${action.type} for borrower ID ${action.borrowerId}`, 'info');
+    if (currentPage === 'agent') renderPage('agent');
+  }
+}
+window.dismissAgentAction = dismissAgentAction;
+
+async function executeBatchAgentActions() {
+  const pending = agentQueue.filter(q => q.status === 'PENDING');
+  if (pending.length === 0) {
+    showToast('No pending actions in queue.');
+    return;
+  }
+  showToast(`Sending ${pending.length} queued messages... Allow popups if blocked.`);
+  for (let i = 0; i < pending.length; i++) {
+    setTimeout(() => {
+      executeAgentAction(pending[i].id);
+    }, i * 1500);
+  }
+}
+window.executeBatchAgentActions = executeBatchAgentActions;
+
+function clearAgentQueue() {
+  agentQueue = [];
+  saveAgentQueue();
+  showToast('Agent queue cleared.');
+  if (currentPage === 'agent') renderPage('agent');
+}
+window.clearAgentQueue = clearAgentQueue;
+
+// ==========================================
+// 🔄 ENHANCED SMART AGENT SCAN
+// ==========================================
 async function runSmartAgentScan() {
   if (!agentConfig.enabled) return;
   
   agentLastScan = new Date();
+  resetDailyTracking();
   let actionCount = 0;
 
-  // 1. Process Unprocessed Incoming Payment SMS
+  // ─── 1. Process Unprocessed Incoming Payment SMS & Auto-Queue Receipts ───
   if (agentConfig.autoProcessSms) {
     try {
       const smsRows = await getUnprocessedSms();
       for (const row of smsRows) {
-        const parsed = parseBankSMS(row.body);
-        if (parsed.isCredit && parsed.creditAmount > 0) {
-          const matchedBorrower = matchVPAToBorrower(parsed.senderVPA, row.sender, borrowers);
+        const parsed = parseBankSMS(row.body || row.sms_text);
+        if (parsed && ((parsed.isCredit && parsed.creditAmount > 0) || (parsed.parsed && parsed.amount > 0))) {
+          const creditAmt = parsed.creditAmount || parsed.amount || 0;
+          const vpa = parsed.senderVPA || '';
+          const matchedBorrower = matchVPAToBorrower(vpa, row.sender, borrowers);
           if (matchedBorrower) {
             const activeLoan = getBorrowerOverdueLoan(matchedBorrower.id) || loans.find(l => l.borrowerId === matchedBorrower.id && ['ACTIVE', 'OVERDUE'].includes(l.status));
             if (activeLoan) {
+              const receiptNo = `AGT-${Date.now().toString(36).toUpperCase()}`;
               const rep = {
                 loanId: activeLoan.id,
                 borrowerId: matchedBorrower.id,
-                amount: parsed.creditAmount,
+                amount: creditAmt,
+                paidOn: new Date().toISOString().split('T')[0],
                 date: new Date().toISOString().split('T')[0],
                 mode: 'UPI',
+                method: 'UPI',
+                receipt: receiptNo,
                 notes: `Auto-recorded by Smart Agent via SMS (${row.sender})`,
                 created_at: new Date().toISOString()
               };
@@ -4629,13 +4845,46 @@ async function runSmartAgentScan() {
 
               logAgentActivity(
                 '💰 Payment Auto-Recorded',
-                `Received ₹${parsed.creditAmount.toLocaleString('en-IN')} from ${matchedBorrower.name} via ${row.sender} SMS`,
+                `₹${creditAmt.toLocaleString('en-IN')} from ${matchedBorrower.name} via SMS. Receipt: ${receiptNo}. Balance: ₹${newStats.amountLeft.toLocaleString('en-IN')}`,
                 'success'
               );
               triggerNotification(
-                `💰 Payment Auto-Recorded (₹${parsed.creditAmount.toLocaleString('en-IN')})`,
-                `Received from ${matchedBorrower.name} via SMS. Balance updated.`
+                `💰 ₹${creditAmt.toLocaleString('en-IN')} from ${matchedBorrower.name}`,
+                `Payment auto-recorded. Balance: ₹${newStats.amountLeft.toLocaleString('en-IN')}`
               );
+              
+              // ─── AUTO-QUEUE PAYMENT RECEIPT FOR WHATSAPP ───
+              if (agentConfig.autoSendReceipts) {
+                const receiptImg = generateReceiptImage(
+                  matchedBorrower.name,
+                  matchedBorrower.phone || '',
+                  creditAmt,
+                  new Date().toISOString().split('T')[0],
+                  'UPI',
+                  receiptNo,
+                  `Auto-recorded via SMS`,
+                  newStats.amountLeft
+                );
+                
+                const lenderName = settings.lenderName || 'LenderBook';
+                const receiptMsg = `🧾 *${lenderName} — Payment Receipt*\n\nDear ${matchedBorrower.name},\n\n✅ Payment of ₹${creditAmt.toLocaleString('en-IN')} received successfully!\n\n📋 Receipt No: ${receiptNo}\n📅 Date: ${new Date().toLocaleDateString('en-IN')}\n💳 Method: UPI\n💰 Remaining Balance: ₹${newStats.amountLeft.toLocaleString('en-IN')}${newStats.amountLeft <= 0 ? '\n\n🎉 LOAN FULLY PAID! Congratulations!' : ''}\n\nThank you for your payment! 🙏\n— ${lenderName}`;
+                
+                const queued = queueAgentAction('PAYMENT_RECEIPT', matchedBorrower.id, activeLoan.id, {
+                  message: receiptMsg,
+                  amount: creditAmt,
+                  receiptNo,
+                  receiptImage: receiptImg,
+                  borrowerName: matchedBorrower.name,
+                  borrowerPhone: matchedBorrower.phone || '',
+                  balance: newStats.amountLeft
+                });
+                
+                if (queued) {
+                  logAgentActivity('🧾 Receipt Queued', `Payment receipt for ₹${creditAmt.toLocaleString('en-IN')} queued for ${matchedBorrower.name}. Tap Send to share via WhatsApp.`, 'receipt');
+                  triggerNotification('🧾 Receipt Ready to Send', `Tap to send ₹${creditAmt.toLocaleString('en-IN')} receipt to ${matchedBorrower.name}`);
+                }
+              }
+              
               actionCount++;
             }
           }
@@ -4646,7 +4895,7 @@ async function runSmartAgentScan() {
     }
   }
 
-  // 2. Check & Flag Overdue Loans
+  // ─── 2. Check & Flag Overdue Loans + Auto-Queue WhatsApp Reminders ───
   if (agentConfig.autoFlagOverdue) {
     const today = new Date().toISOString().split('T')[0];
     for (const l of loans) {
@@ -4661,28 +4910,97 @@ async function runSmartAgentScan() {
         
         logAgentActivity(
           '⚠️ Overdue Loan Flagged',
-          `Loan L-${l.id} for ${bName} is overdue. Outstanding balance: ₹${calcOutstanding(l).toLocaleString('en-IN')}`,
+          `Loan L-${l.id} for ${bName} is overdue. Outstanding: ₹${calcOutstanding(l).toLocaleString('en-IN')}`,
           'warning'
         );
         triggerNotification(
-          `⚠️ Overdue Loan Alert (${bName})`,
-          `Loan L-${l.id} is overdue with balance ₹${calcOutstanding(l).toLocaleString('en-IN')}`
+          `⚠️ Overdue: ${bName}`,
+          `Loan L-${l.id} overdue. ₹${calcOutstanding(l).toLocaleString('en-IN')} pending.`
         );
         actionCount++;
       }
     }
   }
 
+  // ─── 3. Auto-Queue Overdue Reminder WhatsApp Messages ───
+  if (agentConfig.autoSendReminders) {
+    const overdueLoans = loans.filter(l => ['OVERDUE', 'DEFAULTED'].includes(l.status) && calcOutstanding(l) > 0);
+    for (const l of overdueLoans) {
+      const b = borrowers.find(x => x.id === l.borrowerId);
+      if (!b || !b.phone) continue;
+      
+      const stats = getLoanStats(l);
+      const msg = generateTeluguOverdueMessage(b, l);
+      
+      const queued = queueAgentAction('OVERDUE_REMINDER', b.id, l.id, {
+        message: msg,
+        amount: stats.amountLeft,
+        borrowerName: b.name,
+        borrowerPhone: b.phone,
+        dueDate: l.dueDate
+      });
+      
+      if (queued) {
+        logAgentActivity('📩 Overdue Reminder Queued', `Reminder for ${b.name} (₹${stats.amountLeft.toLocaleString('en-IN')}) queued for WhatsApp. Tap Send to deliver.`, 'warning');
+        actionCount++;
+      }
+    }
+  }
+
+  // ─── 4. Auto-Queue Upcoming Payment Reminders (Pre-Due) ───
+  if (agentConfig.autoUpcomingReminders) {
+    const today = new Date();
+    const daysBefore = agentConfig.reminderDaysBeforeDue || 2;
+    
+    for (const l of loans) {
+      if (l.status !== 'ACTIVE' || !l.dueDate) continue;
+      const outstanding = calcOutstanding(l);
+      if (outstanding <= 0) continue;
+      
+      const dueDate = new Date(l.dueDate);
+      const diffDays = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
+      
+      if (diffDays >= 0 && diffDays <= daysBefore) {
+        const b = borrowers.find(x => x.id === l.borrowerId);
+        if (!b || !b.phone) continue;
+        
+        const stats = getLoanStats(l);
+        const lenderName = settings.lenderName || 'LenderBook';
+        const upiBlock = generateUpiPayBlock(stats.amountLeft);
+        const daysText = diffDays === 0 ? 'ఈ రోజు' : (diffDays === 1 ? 'రేపు' : `${diffDays} రోజుల్లో`);
+        
+        const reminderMsg = `నమస్కారం ${b.name} గారు 🙏\n\n${lenderName} నుండి సమాచారం.\n\nమీ loan చెల్లింపు ${daysText} (${l.dueDate}) due అవుతుంది.\n\nబకాయి మొత్తం: ₹${stats.amountLeft.toLocaleString('en-IN')}${upiBlock}\n\nసమయానికి చెల్లించగలరు.\nధన్యవాదాలు 🙏\n${lenderName}`;
+        
+        const queued = queueAgentAction('UPCOMING_REMINDER', b.id, l.id, {
+          message: reminderMsg,
+          amount: stats.amountLeft,
+          borrowerName: b.name,
+          borrowerPhone: b.phone,
+          dueDate: l.dueDate,
+          daysLeft: diffDays
+        });
+        
+        if (queued) {
+          logAgentActivity('📅 Upcoming Due Reminder Queued', `Payment due in ${diffDays} day(s) for ${b.name} (₹${stats.amountLeft.toLocaleString('en-IN')}). Tap Send.`, 'info');
+          actionCount++;
+        }
+      }
+    }
+  }
+
+  // ─── 5. Periodic Clean Scan Log ───
   if (actionCount === 0 && (agentLogs.length === 0 || new Date() - new Date(agentLogs[0].timestamp) > 300000)) {
-    logAgentActivity('🔍 System Scan Clean', `Monitored ${loans.length} loans and ${borrowers.length} borrowers. All payments up to date.`, 'info');
+    logAgentActivity('🔍 System Scan Clean', `Scanned ${loans.length} loans, ${borrowers.length} borrowers. Queue: ${agentQueue.filter(q=>q.status==='PENDING').length} pending actions.`, 'info');
   }
 
   updateAgentTopbarBadge();
+  updateAgentQueueBadge();
 }
 window.runSmartAgentScan = runSmartAgentScan;
 
 function initSmartAgent() {
   updateAgentTopbarBadge();
+  updateAgentQueueBadge();
   runSmartAgentScan();
   
   if (agentTimerId) clearInterval(agentTimerId);
@@ -4692,29 +5010,76 @@ function initSmartAgent() {
 }
 window.initSmartAgent = initSmartAgent;
 
-// Render Smart Agent Control Panel & Log Stream
+// ==========================================
+// 🖥️ SMART AGENT DASHBOARD UI
+// ==========================================
 function renderAgent() {
   const activeCount = loans.filter(l => l.status === 'ACTIVE').length;
   const overdueCount = loans.filter(l => l.status === 'OVERDUE').length;
   const totalMonitored = borrowers.length;
-  const lastScanStr = agentLastScan ? agentLastScan.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Pending scan...';
+  const pendingActions = agentQueue.filter(q => q.status === 'PENDING');
+  const sentActions = agentQueue.filter(q => q.status === 'SENT');
+  const lastScanStr = agentLastScan ? agentLastScan.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Pending...';
 
+  // --- QUEUE ITEMS HTML ---
+  const queueHtml = pendingActions.length === 0
+    ? `<div class="empty" style="padding:24px;"><i class="ti ti-inbox" style="font-size:32px; display:block; margin-bottom:8px; color:#CBD5E1;"></i>No pending actions. The agent will auto-queue reminders & receipts when needed.</div>`
+    : pendingActions.map(q => {
+      const b = borrowers.find(x => x.id === q.borrowerId);
+      const bName = b ? b.name : 'Unknown';
+      const typeLabel = q.type === 'PAYMENT_RECEIPT' ? '🧾 Payment Receipt' :
+                        q.type === 'OVERDUE_REMINDER' ? '⚠️ Overdue Reminder' :
+                        q.type === 'UPCOMING_REMINDER' ? '📅 Upcoming Due Reminder' :
+                        q.type === 'LATE_WARNING' ? '🚨 Late Warning' : '📤 Message';
+      const typeBadgeColor = q.type === 'PAYMENT_RECEIPT' ? '#059669' :
+                             q.type === 'OVERDUE_REMINDER' ? '#DC2626' :
+                             q.type === 'UPCOMING_REMINDER' ? '#2563EB' : '#7C3AED';
+      const amtStr = q.data.amount ? `₹${Math.round(q.data.amount).toLocaleString('en-IN')}` : '';
+      const timeStr = new Date(q.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      
+      return `
+      <div class="agent-queue-item">
+        <div style="display:flex; align-items:flex-start; gap:10px; flex:1; min-width:0;">
+          <div class="avatar" style="width:32px; height:32px; font-size:12px; flex-shrink:0;">${bName.charAt(0)}</div>
+          <div style="flex:1; min-width:0;">
+            <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:3px;">
+              <span style="font-weight:600; font-size:13px; color:var(--color-text-primary);">${bName}</span>
+              <span class="badge" style="background:${typeBadgeColor}; color:white; font-size:9px; padding:2px 6px;">${typeLabel}</span>
+            </div>
+            <div style="font-size:11px; color:var(--color-text-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+              ${amtStr ? `<strong>${amtStr}</strong> · ` : ''}${q.data.dueDate ? `Due: ${q.data.dueDate} · ` : ''}Queued ${timeStr}
+            </div>
+          </div>
+        </div>
+        <div style="display:flex; gap:6px; flex-shrink:0; align-items:center;">
+          <button class="btn btn-sm btn-primary" onclick="window.executeAgentAction('${q.id}')" style="background:#25D366; border-color:#25D366; font-weight:600; font-size:11px; padding:4px 10px;">
+            <i class="ti ti-brand-whatsapp"></i> Send
+          </button>
+          <button class="btn btn-sm" onclick="window.dismissAgentAction('${q.id}')" style="font-size:11px; padding:4px 8px; color:#94A3B8;">
+            <i class="ti ti-x"></i>
+          </button>
+        </div>
+      </div>`;
+    }).join('');
+
+  // --- ACTIVITY LOGS HTML ---
   const logsHtml = agentLogs.length === 0
-    ? `<div class="empty"><i class="ti ti-robot" style="font-size:36px; display:block; margin-bottom:8px; color:#CBD5E1;"></i>No agent activity recorded yet. Run a manual scan to get started.</div>`
-    : agentLogs.map(log => {
+    ? `<div class="empty"><i class="ti ti-robot" style="font-size:32px; display:block; margin-bottom:8px; color:#CBD5E1;"></i>No activity yet.</div>`
+    : agentLogs.slice(0, 30).map(log => {
         const timeStr = new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         const dateStr = new Date(log.timestamp).toLocaleDateString([], { month: 'short', day: 'numeric' });
+        const iconMap = { success: 'ti-check', warning: 'ti-alert-triangle', info: 'ti-info-circle', receipt: 'ti-receipt' };
         return `
         <div class="agent-log-item">
           <div class="agent-log-icon ${log.type}">
-            <i class="ti ${log.type === 'success' ? 'ti-check' : (log.type === 'warning' ? 'ti-alert-triangle' : 'ti-info-circle')}"></i>
+            <i class="ti ${iconMap[log.type] || 'ti-info-circle'}"></i>
           </div>
-          <div style="flex:1;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
-              <span style="font-weight:600; color:var(--color-text-primary);">${log.action}</span>
-              <span style="font-size:10px; color:var(--color-text-tertiary);">${dateStr} ${timeStr}</span>
+          <div style="flex:1; min-width:0;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px; gap:6px;">
+              <span style="font-weight:600; color:var(--color-text-primary); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${log.action}</span>
+              <span style="font-size:9px; color:var(--color-text-tertiary); flex-shrink:0;">${dateStr} ${timeStr}</span>
             </div>
-            <div style="font-size:12px; color:var(--color-text-secondary); line-height:1.4;">${log.details}</div>
+            <div style="font-size:11px; color:var(--color-text-secondary); line-height:1.4; overflow-wrap:anywhere;">${log.details}</div>
           </div>
         </div>`;
       }).join('');
@@ -4727,13 +5092,13 @@ function renderAgent() {
         <div>
           <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
             <span class="badge" style="background:#10B981; color:white; font-weight:600; font-size:11px; padding:4px 8px;">
-              🤖 AI SMART AGENT
+              🤖 AI SMART AGENT v2
             </span>
             <span style="font-size:12px; opacity:0.85;">Status: ${agentConfig.enabled ? '🟢 Active & Monitoring' : '🔴 Paused'}</span>
           </div>
-          <h2 style="font-size:22px; font-weight:700; margin-bottom:6px;">Auto-Pilot Payment & Overdue Agent</h2>
+          <h2 style="font-size:22px; font-weight:700; margin-bottom:6px;">Auto-Pilot Payment, Reminders & Receipts</h2>
           <p style="font-size:13px; opacity:0.85; max-width:560px;">
-            The Smart Agent continuously scans incoming bank credit SMS, auto-records loan repayments, monitors overdue dates, and fires desktop notifications 24/7.
+            Monitors SMS payments, auto-records repayments, generates receipts, queues WhatsApp overdue reminders & upcoming due alerts, and sends payment confirmations — all automatically.
           </p>
         </div>
 
@@ -4746,38 +5111,62 @@ function renderAgent() {
         </div>
       </div>
 
-      <div style="display:flex; gap:12px; margin-top:20px; align-items:center; flex-wrap:wrap;">
-        <button class="btn btn-primary" onclick="window.runSmartAgentScan(); showToast('Manual Agent Scan executed!');" style="background:#10B981; border-color:#10B981; font-weight:600;">
-          <i class="ti ti-bolt"></i> Run Agent Scan Now
+      <div style="display:flex; gap:10px; margin-top:20px; align-items:center; flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="window.runSmartAgentScan(); showToast('Agent scan executed!');" style="background:#10B981; border-color:#10B981; font-weight:600;">
+          <i class="ti ti-bolt"></i> Scan Now
         </button>
-        <button class="btn" onclick="window.requestNotificationPermission()" style="background:rgba(255,255,255,0.15); color:white; border:none;">
-          <i class="ti ti-bell"></i> ${Notification && Notification.permission === 'granted' ? 'Notifications Enabled ✓' : 'Enable Push Notifications'}
+        <button class="btn" onclick="window.executeBatchAgentActions()" style="background:rgba(255,255,255,0.15); color:white; border:none; font-weight:600;">
+          <i class="ti ti-send"></i> Send All (${pendingActions.length})
         </button>
-        <span style="font-size:11px; opacity:0.75; margin-left:auto;">Last scanned: ${lastScanStr}</span>
+        <button class="btn" onclick="window.requestNotificationPermission()" style="background:rgba(255,255,255,0.1); color:white; border:none;">
+          <i class="ti ti-bell"></i> ${typeof Notification !== 'undefined' && Notification.permission === 'granted' ? 'Notifications ✓' : 'Enable Alerts'}
+        </button>
+        <span style="font-size:11px; opacity:0.75; margin-left:auto;">Last scan: ${lastScanStr}</span>
       </div>
     </div>
 
     <!-- Agent Metrics Grid -->
     <div class="stat-grid" style="margin-bottom:20px;">
       <div class="stat-card">
-        <div class="stat-label">MONITORED BORROWERS</div>
+        <div class="stat-label">MONITORED</div>
         <div class="stat-value">${totalMonitored}</div>
-        <div class="stat-sub" style="color:#10B981;">Active in Database</div>
+        <div class="stat-sub" style="color:#10B981;">Borrowers</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">ACTIVE LOANS</div>
         <div class="stat-value" style="color:#185FA5;">${activeCount}</div>
-        <div class="stat-sub">Tracked by Agent</div>
+        <div class="stat-sub">Tracked</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">OVERDUE ALERT LOANS</div>
+        <div class="stat-label">OVERDUE</div>
         <div class="stat-value" style="color:#A32D2D;">${overdueCount}</div>
-        <div class="stat-sub" style="color:#A32D2D;">Flagged by Agent</div>
+        <div class="stat-sub" style="color:#A32D2D;">Flagged</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">AGENT LOGS</div>
-        <div class="stat-value" style="color:#534AB7;">${agentLogs.length}</div>
-        <div class="stat-sub">Automated Actions</div>
+        <div class="stat-label">QUEUE</div>
+        <div class="stat-value" style="color:#7C3AED;">${pendingActions.length}</div>
+        <div class="stat-sub">Pending Actions</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">SENT TODAY</div>
+        <div class="stat-value" style="color:#059669;">${sentActions.filter(s => s.createdAt && s.createdAt.startsWith(new Date().toISOString().split('T')[0])).length}</div>
+        <div class="stat-sub">Delivered</div>
+      </div>
+    </div>
+
+    <!-- ACTION QUEUE PANEL -->
+    <div class="card" style="margin-bottom:20px;">
+      <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span><i class="ti ti-list-check"></i> Agent Action Queue <span class="badge" style="background:#7C3AED; color:white; font-size:10px; padding:2px 8px; margin-left:6px;">${pendingActions.length} pending</span></span>
+        <div style="display:flex; gap:6px;">
+          <button class="btn btn-sm btn-primary" onclick="window.executeBatchAgentActions()" style="background:#25D366; border-color:#25D366; font-size:11px; padding:3px 10px; font-weight:600;">
+            <i class="ti ti-brand-whatsapp"></i> Send All
+          </button>
+          <button class="btn btn-sm" onclick="window.clearAgentQueue()" style="font-size:10px; padding:2px 6px;">Clear</button>
+        </div>
+      </div>
+      <div class="agent-queue-list" style="max-height:360px; overflow-y:auto;">
+        ${queueHtml}
       </div>
     </div>
 
@@ -4785,14 +5174,14 @@ function renderAgent() {
       <!-- Agent Configuration Card -->
       <div class="card">
         <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
-          <span><i class="ti ti-adjustments-horizontal"></i> Agent Capabilities & Rules</span>
+          <span><i class="ti ti-adjustments-horizontal"></i> Agent Capabilities</span>
         </div>
 
         <div style="display:flex; flex-direction:column; gap:14px;">
           <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:0.5px solid var(--color-border-tertiary);">
             <div>
-              <div style="font-weight:600; font-size:13px;">📱 Auto-Match & Record SMS Payments</div>
-              <div style="font-size:11px; color:var(--color-text-tertiary);">Automatically parse incoming credit SMS and add repayments</div>
+              <div style="font-weight:600; font-size:13px;">📱 Auto-Record SMS Payments</div>
+              <div style="font-size:11px; color:var(--color-text-tertiary);">Parse incoming bank credit SMS & add repayments</div>
             </div>
             <label class="switch-label">
               <input type="checkbox" class="switch-input" ${agentConfig.autoProcessSms ? 'checked' : ''} onchange="window.agentConfig.autoProcessSms=this.checked; window.saveAgentConfig();" />
@@ -4802,8 +5191,19 @@ function renderAgent() {
 
           <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:0.5px solid var(--color-border-tertiary);">
             <div>
-              <div style="font-weight:600; font-size:13px;">⚠️ Auto-Flag Overdue Loans</div>
-              <div style="font-size:11px; color:var(--color-text-tertiary);">Automatically change active loans to overdue past due date</div>
+              <div style="font-weight:600; font-size:13px;">🧾 Auto-Queue Payment Receipts</div>
+              <div style="font-size:11px; color:var(--color-text-tertiary);">Generate receipt & queue WhatsApp share after each payment</div>
+            </div>
+            <label class="switch-label">
+              <input type="checkbox" class="switch-input" ${agentConfig.autoSendReceipts ? 'checked' : ''} onchange="window.agentConfig.autoSendReceipts=this.checked; window.saveAgentConfig();" />
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:0.5px solid var(--color-border-tertiary);">
+            <div>
+              <div style="font-weight:600; font-size:13px;">⚠️ Auto-Flag & Remind Overdues</div>
+              <div style="font-size:11px; color:var(--color-text-tertiary);">Flag overdue loans & queue WhatsApp payment reminders</div>
             </div>
             <label class="switch-label">
               <input type="checkbox" class="switch-input" ${agentConfig.autoFlagOverdue ? 'checked' : ''} onchange="window.agentConfig.autoFlagOverdue=this.checked; window.saveAgentConfig();" />
@@ -4813,8 +5213,30 @@ function renderAgent() {
 
           <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:0.5px solid var(--color-border-tertiary);">
             <div>
-              <div style="font-weight:600; font-size:13px;">🔔 Real-Time Browser Push Alerts</div>
-              <div style="font-size:11px; color:var(--color-text-tertiary);">Show popup notifications on payment auto-records and overdue alerts</div>
+              <div style="font-weight:600; font-size:13px;">📤 Auto-Queue Overdue WhatsApp</div>
+              <div style="font-size:11px; color:var(--color-text-tertiary);">Queue late payment WhatsApp reminders daily for all overdues</div>
+            </div>
+            <label class="switch-label">
+              <input type="checkbox" class="switch-input" ${agentConfig.autoSendReminders ? 'checked' : ''} onchange="window.agentConfig.autoSendReminders=this.checked; window.saveAgentConfig();" />
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:0.5px solid var(--color-border-tertiary);">
+            <div>
+              <div style="font-weight:600; font-size:13px;">📅 Upcoming Due Reminders</div>
+              <div style="font-size:11px; color:var(--color-text-tertiary);">Pre-due reminder ${agentConfig.reminderDaysBeforeDue || 2} day(s) before due date</div>
+            </div>
+            <label class="switch-label">
+              <input type="checkbox" class="switch-input" ${agentConfig.autoUpcomingReminders ? 'checked' : ''} onchange="window.agentConfig.autoUpcomingReminders=this.checked; window.saveAgentConfig();" />
+              <span class="switch-slider"></span>
+            </label>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:0.5px solid var(--color-border-tertiary);">
+            <div>
+              <div style="font-weight:600; font-size:13px;">🔔 Push Notifications</div>
+              <div style="font-size:11px; color:var(--color-text-tertiary);">Browser popup notifications for payments & overdues</div>
             </div>
             <label class="switch-label">
               <input type="checkbox" class="switch-input" ${agentConfig.pushNotifications ? 'checked' : ''} onchange="window.agentConfig.pushNotifications=this.checked; window.saveAgentConfig();" />
@@ -4822,26 +5244,40 @@ function renderAgent() {
             </label>
           </div>
 
-          <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div style="display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; border-bottom:0.5px solid var(--color-border-tertiary);">
             <div>
-              <div style="font-weight:600; font-size:13px;">⏱️ Background Scan Frequency</div>
-              <div style="font-size:11px; color:var(--color-text-tertiary);">How often the agent checks database & SMS logs</div>
+              <div style="font-weight:600; font-size:13px;">⏱️ Scan Frequency</div>
+              <div style="font-size:11px; color:var(--color-text-tertiary);">How often agent checks for new events</div>
             </div>
             <select style="width:auto; font-size:12px; padding:4px 8px;" onchange="window.agentConfig.scanIntervalSec=+this.value; window.saveAgentConfig(); window.initSmartAgent();">
-              <option value="15" ${agentConfig.scanIntervalSec === 15 ? 'selected' : ''}>Every 15 sec</option>
-              <option value="30" ${agentConfig.scanIntervalSec === 30 ? 'selected' : ''}>Every 30 sec</option>
-              <option value="60" ${agentConfig.scanIntervalSec === 60 ? 'selected' : ''}>Every 1 min</option>
-              <option value="300" ${agentConfig.scanIntervalSec === 300 ? 'selected' : ''}>Every 5 min</option>
+              <option value="15" ${agentConfig.scanIntervalSec === 15 ? 'selected' : ''}>15 sec</option>
+              <option value="30" ${agentConfig.scanIntervalSec === 30 ? 'selected' : ''}>30 sec</option>
+              <option value="60" ${agentConfig.scanIntervalSec === 60 ? 'selected' : ''}>1 min</option>
+              <option value="300" ${agentConfig.scanIntervalSec === 300 ? 'selected' : ''}>5 min</option>
+            </select>
+          </div>
+
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+              <div style="font-weight:600; font-size:13px;">📅 Pre-Due Reminder Days</div>
+              <div style="font-size:11px; color:var(--color-text-tertiary);">Days before due date to send upcoming reminder</div>
+            </div>
+            <select style="width:auto; font-size:12px; padding:4px 8px;" onchange="window.agentConfig.reminderDaysBeforeDue=+this.value; window.saveAgentConfig();">
+              <option value="1" ${agentConfig.reminderDaysBeforeDue === 1 ? 'selected' : ''}>1 day</option>
+              <option value="2" ${agentConfig.reminderDaysBeforeDue === 2 ? 'selected' : ''}>2 days</option>
+              <option value="3" ${agentConfig.reminderDaysBeforeDue === 3 ? 'selected' : ''}>3 days</option>
+              <option value="5" ${agentConfig.reminderDaysBeforeDue === 5 ? 'selected' : ''}>5 days</option>
+              <option value="7" ${agentConfig.reminderDaysBeforeDue === 7 ? 'selected' : ''}>7 days</option>
             </select>
           </div>
         </div>
       </div>
 
-      <!-- Agent Activity Log Timeline Stream -->
+      <!-- Agent Activity Log Timeline -->
       <div class="card">
         <div class="card-title" style="display:flex; justify-content:space-between; align-items:center;">
-          <span><i class="ti ti-activity"></i> Live Agent Activity Log</span>
-          <button class="btn btn-sm" onclick="window.agentLogs=[]; localStorage.removeItem('lb_agent_logs'); window.renderPage('agent');" style="font-size:11px; padding:2px 6px;">Clear Logs</button>
+          <span><i class="ti ti-activity"></i> Live Activity Log</span>
+          <button class="btn btn-sm" onclick="window.agentLogs=[]; localStorage.removeItem('lb_agent_logs'); window.renderPage('agent');" style="font-size:10px; padding:2px 6px;">Clear</button>
         </div>
         <div class="agent-log-list">
           ${logsHtml}
