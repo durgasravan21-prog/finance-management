@@ -2223,12 +2223,12 @@ function renderMessages() {
     const bMsgCount = msgs.filter(m => m.borrowerId === b.id).length;
     return `
     <div class="msg-borrower-item ${isSelected ? 'selected' : ''}" onclick="window.selectedMessageBorrowerId=${b.id}; window.renderPage('messages');">
-      <div style="display: flex; align-items: center; justify-content: space-between;">
-        <div style="font-weight: 600; font-size: 13px; color: var(--color-text-primary); display: flex; align-items: center; gap: 8px;">
-          <div class="avatar" style="width: 26px; height: 26px; font-size: 11px;">${b.name.charAt(0)}</div>
-          <span>${b.name}</span>
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+        <div style="font-weight: 600; font-size: 13px; color: var(--color-text-primary); display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden;">
+          <div class="avatar" style="width: 26px; height: 26px; font-size: 11px; flex-shrink: 0;">${b.name.charAt(0)}</div>
+          <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${b.name}</span>
         </div>
-        ${bOverdue ? `<span class="badge badge-overdue" style="font-size: 9px; padding: 2px 6px;">Overdue</span>` : ''}
+        ${bOverdue ? `<span class="badge badge-overdue" style="font-size: 9px; padding: 2px 6px; flex-shrink: 0;">Overdue</span>` : ''}
       </div>
       <div style="font-size: 11px; color: var(--color-text-tertiary); margin-top: 4px; display: flex; justify-content: space-between;">
         <span>${b.phone}</span>
@@ -2238,17 +2238,17 @@ function renderMessages() {
   }).join('');
 
   const messageBubblesHtml = borrowerMsgs.length === 0
-    ? `<div style="text-align: center; color: var(--color-text-tertiary); padding: 40px 16px; font-size: 13px;">
-        <i class="ti ti-messages" style="font-size: 36px; color: #CBD5E1; display: block; margin-bottom: 8px;"></i>
+    ? `<div style="text-align: center; color: var(--color-text-tertiary); padding: 30px 12px; font-size: 13px;">
+        <i class="ti ti-messages" style="font-size: 32px; color: #CBD5E1; display: block; margin-bottom: 8px;"></i>
         No message history yet for ${resolvedBorrower ? resolvedBorrower.name : 'this borrower'}.<br/>
-        Use the composer below to send WhatsApp/SMS reminders with QR scanner photo!
+        Send WhatsApp or SMS reminders below!
       </div>`
     : borrowerMsgs.map(m => {
         const isSent = m.direction === 'SENT';
         const timeStr = m.sentAt ? new Date(m.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
         return `
-        <div style="display: flex; justify-content: ${isSent ? 'flex-end' : 'flex-start'}; margin-bottom: 12px;">
-          <div style="max-width: 85%; padding: 10px 14px; border-radius: 12px; background: ${isSent ? '#DCF8C6' : '#FFFFFF'}; color: #1E293B; box-shadow: 0 1px 2px rgba(0,0,0,0.1); border: 0.5px solid ${isSent ? '#BBF7D0' : '#E2E8F0'}; font-size: 13px; line-height: 1.4; white-space: pre-wrap;">
+        <div style="display: flex; justify-content: ${isSent ? 'flex-end' : 'flex-start'}; margin-bottom: 10px; width: 100%;">
+          <div class="msg-bubble-card" style="background: ${isSent ? '#DCF8C6' : '#FFFFFF'}; color: #1E293B; border: 0.5px solid ${isSent ? '#BBF7D0' : '#E2E8F0'};">
             <div style="font-weight: 600; font-size: 10px; color: ${isSent ? '#166534' : '#1E40AF'}; margin-bottom: 4px;">
               ${isSent ? 'Outbound Reminder (Sent)' : 'Inbound Payment SMS'}
             </div>
@@ -2264,7 +2264,7 @@ function renderMessages() {
     <div class="msg-sidebar-panel ${resolvedBorrowerId && isMobile ? 'mobile-hidden' : ''}">
       <div style="padding: 12px; border-bottom: 0.5px solid var(--color-border-primary); background: var(--color-background-secondary);">
         <div style="font-weight: 600; font-size: 14px; margin-bottom: 8px;"><i class="ti ti-users"></i> Borrowers Chat</div>
-        <input class="search-bar" placeholder="Search borrowers..." style="font-size: 12px; padding: 6px 10px; width:100%;" oninput="window.filterMsgBorrowers(this.value)" />
+        <input class="search-bar" placeholder="Search borrowers..." style="font-size: 12px; padding: 6px 10px; width: 100%; box-sizing: border-box;" oninput="window.filterMsgBorrowers(this.value)" />
       </div>
       <div id="msg-borrowers-list" style="overflow-y: auto; flex: 1;">
         ${borrowerListHtml || '<div class="empty">No borrowers found</div>'}
@@ -2274,18 +2274,18 @@ function renderMessages() {
     <!-- Chat Thread Panel -->
     <div class="msg-chat-panel ${!resolvedBorrowerId && isMobile ? 'mobile-hidden' : ''}">
       ${resolvedBorrower ? `
-      <div style="padding: 10px 14px; border-bottom: 0.5px solid var(--color-border-primary); background: var(--color-background-secondary); display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
-        <div style="display: flex; align-items: center; gap: 8px;">
-          ${isMobile ? `<button class="btn btn-sm" onclick="window.selectedMessageBorrowerId=null; window.renderPage('messages');" style="padding:4px 8px; font-weight:600;"><i class="ti ti-arrow-left"></i> List</button>` : ''}
-          <div class="avatar" style="width: 32px; height: 32px; font-size: 13px;">${resolvedBorrower.name.charAt(0)}</div>
-          <div>
-            <div style="font-weight: 600; font-size: 14px;">${resolvedBorrower.name}</div>
-            <div style="font-size: 11px; color: var(--color-text-secondary);">
+      <div style="padding: 10px 12px; border-bottom: 0.5px solid var(--color-border-primary); background: var(--color-background-secondary); display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;">
+        <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
+          ${isMobile ? `<button class="btn btn-sm" onclick="window.selectedMessageBorrowerId=null; window.renderPage('messages');" style="padding:4px 8px; font-weight:600; flex-shrink: 0;"><i class="ti ti-arrow-left"></i> List</button>` : ''}
+          <div class="avatar" style="width: 32px; height: 32px; font-size: 13px; flex-shrink: 0;">${resolvedBorrower.name.charAt(0)}</div>
+          <div style="min-width: 0; overflow: hidden;">
+            <div style="font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${resolvedBorrower.name}</div>
+            <div style="font-size: 11px; color: var(--color-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
               ${resolvedBorrower.phone} ${totalDue > 0 ? `· Due: <strong style="color:#A32D2D">${fmt(totalDue)}</strong>` : ''}
             </div>
           </div>
         </div>
-        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+        <div style="display: flex; gap: 6px; flex-wrap: wrap; flex-shrink: 0;">
           <button class="btn btn-sm btn-secondary" onclick="window.showUpiQrModal(${resolvedBorrower.id})" style="background:#534AB7; color:white; border:none; padding:4px 8px; font-weight:600;">
             <i class="ti ti-qrcode"></i> QR Pay
           </button>
@@ -2295,18 +2295,18 @@ function renderMessages() {
         </div>
       </div>
 
-      <div style="flex: 1; overflow-y: auto; padding: 14px; background: #F8FAFC; min-height: 220px;">
+      <div style="flex: 1; overflow-y: auto; overflow-x: hidden; padding: 12px; background: #F8FAFC; min-height: 200px;">
         ${messageBubblesHtml}
       </div>
 
-      <div style="padding: 10px 14px; border-top: 0.5px solid var(--color-border-primary); background: white;">
+      <div style="padding: 10px 12px; border-top: 0.5px solid var(--color-border-primary); background: white; box-sizing: border-box;">
         <div style="margin-bottom: 6px;">
           <label class="form-label" style="font-weight: 600; font-size: 11px; margin: 0;">Compose Reminder Message</label>
         </div>
-        <textarea id="msg-compose-input" rows="3" style="width: 100%; font-size: 12px; padding: 8px; border-radius: 8px; border: 1px solid var(--color-border-primary); font-family: inherit;">${defaultMsg}</textarea>
+        <textarea id="msg-compose-input" rows="3" style="width: 100%; font-size: 12px; padding: 8px; border-radius: 8px; border: 1px solid var(--color-border-primary); font-family: inherit; box-sizing: border-box; resize: vertical;">${defaultMsg}</textarea>
         <div style="display: flex; gap: 6px; margin-top: 8px; justify-content: flex-end; flex-wrap: wrap;">
           <button class="btn btn-primary btn-sm" onclick="window.sendWhatsAppWithQRImage(${resolvedBorrower.id}, ${totalDue}, document.getElementById('msg-compose-input').value)" style="background: #25D366; border-color: #25D366; font-weight: 600;">
-            <i class="ti ti-brand-whatsapp"></i> Send WhatsApp (With QR Photo)
+            <i class="ti ti-brand-whatsapp"></i> WhatsApp QR
           </button>
           <button class="btn btn-sm" onclick="window.sendDirectSMS(${resolvedBorrower.id}, encodeURIComponent(document.getElementById('msg-compose-input').value))">
             <i class="ti ti-message"></i> Send SMS

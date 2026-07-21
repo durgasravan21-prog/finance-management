@@ -812,6 +812,8 @@ textarea:focus {
   grid-template-columns: 280px 1fr;
   gap: 16px;
   height: calc(100vh - 120px);
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .msg-sidebar-panel,
@@ -823,6 +825,8 @@ textarea:focus {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .msg-borrower-item {
@@ -843,13 +847,27 @@ textarea:focus {
   border-left-color: #534AB7;
 }
 
+.msg-bubble-card {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  box-sizing: border-box;
+}
+
 @media (max-width: 768px) {
   .msg-layout-container {
     display: flex;
     flex-direction: column;
     height: auto;
-    min-height: 70vh;
+    min-height: auto;
     gap: 10px;
+    width: 100%;
+    overflow-x: hidden;
   }
 
   .mobile-hidden {
@@ -859,6 +877,15 @@ textarea:focus {
   .msg-sidebar-panel,
   .msg-chat-panel {
     border-radius: var(--border-radius-md);
-    min-height: 400px;
+    width: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden;
+    min-height: 380px;
+  }
+
+  .msg-bubble-card {
+    max-width: 92%;
+    padding: 8px 10px;
+    font-size: 12px;
   }
 }
